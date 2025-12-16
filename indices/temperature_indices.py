@@ -233,3 +233,4 @@ class DTRIndex(BaseIndex):
     required_vars = ["tasmax", "tasmin"]
     frequencies = ["mon", "yr"]
     backend_callable_name = 'dtr'
+

@@ -124,6 +124,7 @@ class PythonBackend:
         uniq, inv = np.unique(group_key, return_inverse=True)
         return uniq, inv
 
+
     def _aggregate_by_group(
         self,
         data: np.ndarray,
@@ -144,6 +145,30 @@ class PythonBackend:
             out[i] = reducer(data[group_index == i], axis=0)
 
         return out
+
+
+    def _count_consecutive_days(
+        self,
+        bool_array: np.ndarray
+    ) -> np.ndarray:
+        # Initialize the output array
+        cumulative = np.zeros_like(bool_array, dtype=np.int32)
+
+        # Initialize a tracker for the current run length for each spatial point
+        current_run = np.zeros(bool_array.shape[1:], dtype=np.int32)
+
+        # Iterate over the time dimension
+        for t in range(bool_array.shape[0]):
+            # Logic:
+            # If bool_array[t] is True (1): current_run becomes current_run + 1
+            # If bool_array[t] is False (0): current_run becomes 0
+            # This can be vectorized as: (current_run + 1) * bool_array[t]
+
+            current_run = (current_run + 1) * bool_array[t]
+            cumulative[t] = current_run
+
+        return cumulative
+
 
     @check_supported_compute_frequencies
     def txx(
@@ -336,6 +361,63 @@ class PythonBackend:
     # ---
     # precipitation
     # ---
+
+
+    @check_supported_compute_frequencies
+    def cdd(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
+    ):
+        """
+        Consecutive dry days (cddETCCDI) within period.
+
+        Let RRij be the daily precipitation amount on day i in period j.
+        Count the largest number of consecutive days where RRij < 1mm (or
+        1/86400 kg m-2) within period j.
+        """
+
+        # indicate which days are dry
+        is_dry = pr_data < fixed_threshold
+
+        # count consecutive dry days
+        cdd = self._count_consecutive_days(is_dry)
+
+        max_cdd = self._aggregate_by_group(cdd, group_index, np.max)
+
+        logger.debug(f"Computed CDD with shape {max_cdd.shape}")
+
+        return max_cdd
+
+    @check_supported_compute_frequencies
+    def cwd(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
+    ):
+        """
+        Consecutive wet days (cwdETCCDI).
+
+        Let RRij be the daily precipitation amount on day i in period j.
+        Count the largest number of consecutive days where RRij >= 1mm (or
+        1/86400 kg m-2) within period j.
+        """
+
+        # indicate which days are wet
+        is_wet = pr_data >= fixed_threshold
+
+        # count consecutive wet days
+        cwd = self._count_consecutive_days(is_wet)
+
+        max_cwd = self._aggregate_by_group(cwd, group_index, np.max)
+
+        logger.debug(f"Computed CWD with shape {max_cwd.shape}")
+
+        return max_cwd
 
 
     @check_supported_compute_frequencies
