@@ -3,6 +3,17 @@ from typing import Any
 from netCDF4 import Dataset
 import numpy as np
 
+from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
+    input_var_str_normalize
+)
+from general_backend.logging.setup_logging import get_logger
+from reversclim.utils.preprocessing.variables.extremes.indices.units_utils import (
+    validate_input_units,
+    INPUT_VAR_ALLOWED_INPUT_UNITS,
+)
+
+logger = get_logger(__name__)
+
 
 class DataWrapper:
     """Lightweight wrapper around NetCDF files for index inputs.
@@ -16,13 +27,64 @@ class DataWrapper:
         self.path = Path(path)
         self._ds = Dataset(self.path)
 
-        self.variables = self._ds.variables
-        self.global_attrs = {a: getattr(self._ds, a) for a in self._ds.ncattrs()}
+        # Store original variables dict
+        self._raw_variables = self._ds.variables
+
+        # Create a mapping with canonical names as keys
+        # This allows access via canonical names regardless of file naming
+        self.variables = {}
+        self.units = {}
+        for var in self._raw_variables:
+            canonical = input_var_str_normalize(var)
+            # Store under canonical name, but keep reference to actual NC var
+            self.variables[canonical] = self._raw_variables[var]
+            raw_unit = getattr(self._raw_variables[var], "units", None)
+            if (
+                raw_unit is not None and
+                canonical in INPUT_VAR_ALLOWED_INPUT_UNITS
+            ):
+                if not validate_input_units(input_var=canonical, input_unit=raw_unit):
+                    err_msg = (
+                        f"Invalid unit '{raw_unit}' for variable '{canonical}' "
+                        f"in file {self.path}"
+                    )
+                    logger.error(err_msg, stack_info=True)
+                    raise ValueError(err_msg)
+            self.units[canonical] = raw_unit
+
+        self.global_attrs = {
+            attr: getattr(self._ds, attr) for attr in self._ds.ncattrs()
+        }
+        self.var_attrs = {var: {
+                attr: getattr(self.variables[var], attr)
+                for attr in self.variables[var].ncattrs()
+            } for var in self.variables
+        }
+        logger.debug(f"Opened DataWrapper for {self.path}")
 
     def load_ndarray(self, varname: str):
-        if varname not in self.variables:
-            raise KeyError(f"Variable '{varname}' not found in {self.path}")
-        return self.variables[varname][:]
+        """Load array for variable using canonical name."""
+        canonical_var = input_var_str_normalize(varname)
+        if canonical_var not in self.variables:
+            err_msg = (
+                f"Variable '{varname}' (canonical: '{canonical_var}') "
+                f"not found in {self.path}"
+            )
+            logger.error(err_msg)
+            raise KeyError(err_msg)
+        return self.variables[canonical_var][:]
+
+    def get_units(self, varname: str) -> str | None:
+        """Get units for variable using canonical name."""
+        canonical_var = input_var_str_normalize(varname)
+        if canonical_var not in self.units:
+            err_msg = (
+                f"Units for variable '{varname}' (canonical: "
+                f"'{canonical_var}') not found in {self.path}"
+            )
+            logger.error(err_msg)
+            raise KeyError(err_msg)
+        return self.units[canonical_var]
 
     def close(self):
         try:
@@ -68,7 +130,7 @@ def gather_metadata(
     wrapper is provided, one is constructed from the supplied input files.
 
     Returns a dict with two sections:
-    - String metadata for filename building: source_id, experiment_id, 
+    - String metadata for filename building: source_id, experiment_id,
       variant_label, YYYYMM_start, YYYYMM_end
     - Array/dict metadata for NetCDF writing: lat, lon, time (input time array),
       time_units, calendar, parent_global_attrs, etc.
@@ -105,9 +167,9 @@ def gather_metadata(
             chosen_path = Path(input_files[first_key])
         wrapper = DataWrapper(chosen_path)
         created_here = True
-    
+
     meta: dict[str, Any] = {}
-    
+
     # Extract CF/CMIP-like attrs if present (for filename and global attrs)
     parent_global_attrs = {}
     for key in ("source_id", "experiment_id", "variant_label", "institution",
@@ -118,7 +180,7 @@ def gather_metadata(
             # Also store commonly used ones at top level for filename
             if key in ("source_id", "experiment_id", "variant_label"):
                 meta[key] = str(value)
-    
+
     meta["parent_global_attrs"] = parent_global_attrs
     meta["child_global_attrs"] = {}  # Can be populated by caller
     meta["parent_var_attrs"] = {}    # Can be populated by caller
@@ -133,7 +195,7 @@ def gather_metadata(
                 break
         else:
             meta["lat"] = None
-        
+
         # Latitude bounds
         for cand in ("lat_bnds", "latitude_bnds"):
             if cand in wrapper.variables:
@@ -141,7 +203,7 @@ def gather_metadata(
                 break
         else:
             meta["lat_bnds"] = None
-        
+
         # Longitude
         for cand in ("lon", "longitude"):
             if cand in wrapper.variables:
@@ -149,7 +211,7 @@ def gather_metadata(
                 break
         else:
             meta["lon"] = None
-        
+
         # Longitude bounds
         for cand in ("lon_bnds", "longitude_bnds"):
             if cand in wrapper.variables:
@@ -157,45 +219,53 @@ def gather_metadata(
                 break
         else:
             meta["lon_bnds"] = None
-        
+
         # Time coordinate and metadata
         time_var = None
         for cand in ("time", "Time"):
             if cand in wrapper.variables:
                 time_var = wrapper.variables[cand]
                 break
-        
+
         if time_var is not None:
             from netCDF4 import num2date
             units = getattr(time_var, "units", "days since 1850-01-01")
             calendar = getattr(time_var, "calendar", "standard")
             times_num = time_var[:]
-            
+
             meta["time"] = times_num  # Store numeric time for later processing
             meta["time_units"] = units
             meta["calendar"] = calendar
-            
+
             # Extract time_bnds if available
             if "time_bnds" in wrapper.variables:
                 meta["time_bnds_in"] = wrapper.variables["time_bnds"][:]
             else:
                 meta["time_bnds_in"] = None
-            
+
             if times_num.size > 0:
                 times = num2date(times_num, units=units, calendar=calendar)
                 start_dt = times[0]
                 end_dt = times[-1]
+                # Monthly format (YYYYMM)
                 meta["YYYYMM_start"] = f"{start_dt.year:04d}{start_dt.month:02d}"
                 meta["YYYYMM_end"] = f"{end_dt.year:04d}{end_dt.month:02d}"
+                # Annual format (YYYY)
+                meta["YYYY_start"] = f"{start_dt.year:04d}"
+                meta["YYYY_end"] = f"{end_dt.year:04d}"
             else:
                 meta.setdefault("YYYYMM_start", "unknown")
                 meta.setdefault("YYYYMM_end", "unknown")
+                meta.setdefault("YYYY_start", "unknown")
+                meta.setdefault("YYYY_end", "unknown")
         else:
             meta.setdefault("time", None)
             meta.setdefault("time_units", "unknown")
             meta.setdefault("calendar", "standard")
             meta.setdefault("YYYYMM_start", "unknown")
             meta.setdefault("YYYYMM_end", "unknown")
+            meta.setdefault("YYYY_start", "unknown")
+            meta.setdefault("YYYY_end", "unknown")
 
     except Exception:
         meta.setdefault("lat", None)
@@ -205,6 +275,8 @@ def gather_metadata(
         meta.setdefault("calendar", "standard")
         meta.setdefault("YYYYMM_start", "unknown")
         meta.setdefault("YYYYMM_end", "unknown")
+        meta.setdefault("YYYY_start", "unknown")
+        meta.setdefault("YYYY_end", "unknown")
 
     if created_here and close_wrapper:
         wrapper.close()
@@ -244,7 +316,7 @@ def prepare_time_groupings(
             time_units=time_units,
             calendar=calendar,
         )
-        
+
         # If input has time_bnds, use month/year boundaries for output
         # Otherwise use mean of time_array
         if time_bnds_in is not None:
@@ -252,17 +324,16 @@ def prepare_time_groupings(
             n_groups = int(inv.max()) + 1 if inv.size else 0
             time_out = np.empty(n_groups, dtype=float)
             time_bnds_out = np.empty((n_groups, 2), dtype=float)
-            
+
             for i in range(n_groups):
                 mask = inv == i
                 # For this group, get indices of timesteps
                 indices = np.where(mask)[0]
                 if len(indices) > 0:
-                    first_idx = indices[0]
-                    last_idx = indices[-1]
-                    # Month bounds: lower of first day, upper of last day
-                    lower_bound = float(time_bnds_in[first_idx, 0])
-                    upper_bound = float(time_bnds_in[last_idx, 1])
+                    # Month bounds: lower of first day and of last day
+                    lower_bound = float(time_bnds_in[indices[0], 0])
+                    upper_bound = float(time_bnds_in[indices[-1], 0])
+
                     # Output time: mean of bounds
                     time_out[i] = (lower_bound + upper_bound) / 2.0
                     time_bnds_out[i, 0] = lower_bound
@@ -283,7 +354,7 @@ def prepare_time_groupings(
                 group_times = time_array[inv == i]
                 time_bnds_out[i, 0] = float(group_times.min())
                 time_bnds_out[i, 1] = float(group_times.max())
-        
+
         time_info[fq] = {
             "group_index": inv,
             "time_out": time_out,

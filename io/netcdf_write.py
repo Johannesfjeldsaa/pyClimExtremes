@@ -27,7 +27,7 @@ def build_filename(
     index_id : str
         The index identifier (e.g., 'TXx').
     compute_fq : str
-        The computation frequency (e.g., 'ann').
+        The computation frequency (e.g., 'yr').
     template : str | list[str]
         The filename template, either as a predefined style or a list of
         metadata keys.
@@ -42,10 +42,16 @@ def build_filename(
     """
     if isinstance(template, str):
         if template == "cmip6":
+            # Choose date format based on frequency
+            if compute_fq == "yr":
+                date_keys = ["YYYY_start", "YYYY_end"]
+            else:
+                date_keys = ["YYYYMM_start", "YYYYMM_end"]
+
             template_keys = [
                 "index", "compute_fq", "source_id", "experiment_id",
-                "variant_label", "YYYYMM_start", "YYYYMM_end"
-            ]
+                "variant_label"
+            ] + date_keys
         else:
             raise ValueError(f"Unknown filename template: {template}")
     else:
@@ -54,7 +60,26 @@ def build_filename(
     filename_parts = []
     for key in template_keys:
         if key == "index":
-            filename_parts.append(index_id)
+            # Only add threshold suffix if threshold provided AND differs from default
+            should_add_threshold = False
+            threshold_str = ""
+            if 'threshold' in meta and 'index_class' in meta:
+                threshold = meta['threshold']
+                index_class = meta['index_class']
+                # Check if threshold differs from default_threshold
+                if hasattr(index_class, 'default_threshold'):
+                    if threshold != index_class.default_threshold:
+                        should_add_threshold = True
+                        # Format threshold: remove decimal if it's a whole number
+                        if isinstance(threshold, float) and threshold.is_integer():
+                            threshold_str = f"{int(threshold)}"
+                        else:
+                            threshold_str = f"{threshold}"
+            
+            if should_add_threshold:
+                filename_parts.append(f"{index_id}T{threshold_str}")
+            else:
+                filename_parts.append(index_id)
         elif key == "compute_fq":
             filename_parts.append(compute_fq)
         else:

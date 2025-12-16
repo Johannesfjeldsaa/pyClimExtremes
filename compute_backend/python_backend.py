@@ -1,48 +1,39 @@
 # compute_backends/python_backend.py
+from functools import wraps
+from typing import Callable
+
 import numpy as np
 from netCDF4 import num2date
-from functools import wraps
+from scipy.signal import convolve # use signal convolve for n-dim arrays
 
+from general_backend.logging.setup_logging import get_logger
 from reversclim.utils.preprocessing.variables.extremes.compute_backend.backend_registry import (
     register_backend,
 )
-from general_backend.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 
-# TODO: ETCCDI_TEMPERATURE_VARIABLES = [
-#    "txx",   # Maximum value of daily maximum temperature
-#    "tnn",   # Minimum value of daily minimum temperature
-#    "txn",   # Minimum value of daily maximum temperature
-#    "tnx",   # Maximum value of daily minimum temperature
-#    "fd",    # Frost days (number of days with Tmin < 0°C)
-#    "id",    # Ice days (number of days with Tmax < 0°C)
-#    "su",    # Summer days (number of days with Tmax > 25°C)
-#    "tr",    # Tropical nights (number of days with Tmin > 20°C)
-#    "gsl",   # Growing season length
-#    "wsdi",  # Warm spell duration index
-#    "csdi",  # Cold spell duration index
- #   "dtr",   # Diurnal temperature range (Tmax - Tmin)
-#    "tx10p", # Percentage of days when Tmax < 10th percentile
-#    "tx90p", # Percentage of days when Tmax > 90th percentile
-#    "tn10p", # Percentage of days when Tmin < 10th percentile
-#    "tn90p", # Percentage of days when Tmin > 90th percentile
-#]
 
-supported_compute_frequencies = ["mon", "ann"]
+supported_compute_frequencies = ["mon", "yr"]
+scf_str = ", ".join(supported_compute_frequencies)
 
-def check_supported_compute_frequencies(func):
+
+def check_supported_compute_frequencies(
+    func: Callable
+) -> Callable:
     """Decorator to check if compute_fq is supported."""
+
     @wraps(func)
     def wrapper(self, compute_fq, *args, **kwargs):
         if compute_fq not in supported_compute_frequencies:
             err_msg = (
                 f"Unsupported compute_fq '{compute_fq}', expected one of: "
-                f"{', '.join(supported_compute_frequencies)}"
+                f"{scf_str}"
             )
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
         return func(self, compute_fq, *args, **kwargs)
+
     return wrapper
 
 @register_backend("python")
@@ -51,11 +42,11 @@ class PythonBackend:
 
     def get_time_out(
         self,
-        compute_fq:     str,
-        time_array:     np.ndarray,
-        time_units:     str,
-        calendar:       str,
-        group_index:    np.ndarray | None = None,
+        compute_fq: str,
+        time_array: np.ndarray,
+        time_units: str,
+        calendar: str,
+        group_index: np.ndarray | None = None,
     ) -> np.ndarray:
         """Compute output time coordinate using mean-of-period timestamps.
 
@@ -67,12 +58,16 @@ class PythonBackend:
             return np.array([])
 
         dates = num2date(time_array, units=time_units, calendar=calendar)
-        years = np.fromiter((d.year for d in dates), dtype=int, count=len(time_array))
+        years = np.fromiter(
+            (d.year for d in dates), dtype=int, count=len(time_array)
+        )
 
         if compute_fq == "mon":
-            months = np.fromiter((d.month for d in dates), dtype=int, count=len(time_array))
+            months = np.fromiter(
+                (d.month for d in dates), dtype=int, count=len(time_array)
+            )
             group_key = years * 12 + (months - 1)
-        elif compute_fq == "ann":
+        elif compute_fq == "yr":
             group_key = years
         else:
             err_msg = (
@@ -107,17 +102,24 @@ class PythonBackend:
             return np.array([]), np.array([], dtype=int)
 
         dates = num2date(time_array, units=time_units, calendar=calendar)
-        years = np.fromiter((d.year for d in dates), dtype=int, count=len(time_array))
+        years = np.fromiter(
+            (d.year for d in dates), dtype=int, count=len(time_array)
+        )
 
         if compute_fq == "mon":
-            months = np.fromiter((d.month for d in dates), dtype=int, count=len(time_array))
+            months = np.fromiter(
+                (d.month for d in dates), dtype=int, count=len(time_array)
+            )
             group_key = years * 12 + (months - 1)
-        elif compute_fq == "ann":
+        elif compute_fq == "yr":
             group_key = years
         else:
-            raise ValueError(
-                f"Unsupported compute_fq '{compute_fq}', expected 'mon' or 'ann'."
+            err_msg = (
+                f"Unsupported compute_fq '{compute_fq}', expected one of",
+                scf_str,
             )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
 
         uniq, inv = np.unique(group_key, return_inverse=True)
         return uniq, inv
@@ -138,6 +140,7 @@ class PythonBackend:
         out = np.empty(out_shape, dtype=data.dtype)
 
         for i in range(n_groups):
+            # assuming axis 0 is time we reduce over that axis
             out[i] = reducer(data[group_index == i], axis=0)
 
         return out
@@ -145,9 +148,10 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def txx(
         self,
-        compute_fq:     str,
-        tasmax_data:    np.ndarray,
-        group_index:    np.ndarray | None = None,
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
         """Maximum of daily maximum temperature aggregated by period."""
 
@@ -159,9 +163,10 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def txn(
         self,
-        compute_fq:     str,
-        tasmax_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
         """Minimum of daily maximum temperature aggregated by period."""
 
@@ -170,12 +175,14 @@ class PythonBackend:
 
         return txn
 
+
     @check_supported_compute_frequencies
     def tnx(
         self,
-        compute_fq:     str,
-        tasmin_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
         """Maximum of daily minimum temperature aggregated by period."""
 
@@ -187,9 +194,10 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def tnn(
         self,
-        compute_fq:     str,
-        tasmin_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray ,
+        fixed_threshold:    None = None # not used
     ):
         """Minimum of daily minimum temperature aggregated by period."""
 
@@ -201,10 +209,11 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def dtr(
         self,
-        compute_fq:     str,
-        tasmax_data:    np.ndarray,
-        tasmin_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
         """Diurnal temperature range aggregated by period."""
 
@@ -217,13 +226,21 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def fd(
         self,
-        compute_fq:     str,
-        tasmin_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
-        """Frost days (number of days with Tmin < 0°C) for year"""
+        """Frost days (number of days with Tmin < 0°C or 273.15 K) for year
 
-        frost_days_daily = (tasmin_data < 0).astype(int)
+        Parameters
+        ----------
+        freeze_threshold : float
+            Temperature threshold, use 0°C if input data is in degrees Celsius,
+            or 273.15 K if input data is in Kelvin.
+        """
+
+        frost_days_daily = (tasmin_data < fixed_threshold).astype(int)
         fd = self._aggregate_by_group(frost_days_daily, group_index, np.sum)
         logger.debug(f"Computed FD with shape {fd.shape}")
 
@@ -232,126 +249,243 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def su(
         self,
-        compute_fq:     str,
-        tasmax_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        threshold:          float
     ):
-        """Summer days (number of days with Tmax > 25°C) for year"""
+        """Summer days (number of days with Tmax > 25°C or 298.15 K) for year
 
-        summer_days_daily = (tasmax_data > 25).astype(int)
+        Parameters
+        ----------
+        threshold : float
+            Temperature threshold, default definition is 25°C if input data is
+            in degrees Celsius, or 298.15 K if input data is in Kelvin.
+        """
+
+        summer_days_daily = (tasmax_data > threshold).astype(int)
         su = self._aggregate_by_group(summer_days_daily, group_index, np.sum)
-        logger.debug(f"Computed SU with shape {su.shape}")
+        logger.debug(
+            "Computed SU with threshold=%s and shape %s",
+            threshold, su.shape
+        )
 
         return su
 
     @check_supported_compute_frequencies
     def id(
         self,
-        compute_fq:     str, # passed for decorator to check, but not used
-        tasmax_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
-        """Ice days (number of days with Tmax < 0°C) for year"""
+        """Ice days (number of days with Tmax < 0°C or 273.15 K) for year
 
-        ice_days_daily = (tasmax_data < 0).astype(int)
+        Parameters
+        ----------
+        fixed_threshold : float
+            Temperature threshold, use 0°C if input data is in degrees Celsius,
+            or 273.15 K if input data is in Kelvin.
+        """
+
+        ice_days_daily = (tasmax_data < fixed_threshold).astype(int)
         iday = self._aggregate_by_group(ice_days_daily, group_index, np.sum)
         logger.debug(f"Computed ID with shape {iday.shape}")
 
         return iday
 
-
     @check_supported_compute_frequencies
     def tr(
         self,
-        compute_fq:     str,
-        tasmin_data:    np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
-        """Tropical nights (number of days with Tmin > 20°C) for year"""
+        """Tropical nights (number of days with Tmin > 20°C or 293.15 K)
+        for year
 
-        tropical_nights_daily = (tasmin_data > 20).astype(int)
-        tr = self._aggregate_by_group(tropical_nights_daily, group_index, np.sum)
+        Parameters
+        ----------
+        fixed_threshold : float
+            Temperature threshold, default definition is 20°C if input data is
+            in degrees Celsius, or 293.15 K if input data is in Kelvin.
+        """
+
+        tropical_nights_daily = (tasmin_data > fixed_threshold).astype(int)
+        tr = self._aggregate_by_group(
+            tropical_nights_daily, group_index, np.sum
+        )
         logger.debug(f"Computed TR with shape {tr.shape}")
 
         return tr
 
-
     @check_supported_compute_frequencies
     def gsl(
         self,
-        compute_fq:     str,
-        tas_data:       np.ndarray,
-        group_index:    np.ndarray | None = None
+        compute_fq:         str,
+        tas_data:           np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
         """Growing season length (number of days with Tmin > 5°C) for year"""
         pass
+
 
     # ---
     # precipitation
     # ---
 
+
+    @check_supported_compute_frequencies
+    def rxnday(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        threshold:          int
+    ):
+        """
+        Maximum n-day precipitation over period.
+        Let RR_kj be the precipitation amount for n-day period ending at day
+        k in period j. Then,
+            RXnday_j = max(RR_kj) for all k in period j
+
+        Parameters
+        ----------
+        n_days : int
+            Number of days over which to compute maximum precipitation sum.
+        """
+         # we have to convolve with a window of 5 days to get the rolling sums
+        window_size = threshold
+        if window_size < 1:
+            err_msg = f"Invalid window_size {window_size}, must be >= 1"
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+        elif window_size == 1:
+            # rx1day is just the maximum daily precipitation
+            rxnday = self._aggregate_by_group(pr_data, group_index, np.max)
+        else:
+            if pr_data.shape[0] < window_size:
+                err_msg = (
+                    f"Insufficient time steps ({pr_data.shape[0]}) "
+                    f"for computing rx5day requiring at least {window_size}"
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+
+            # To compute the rolling sum over the time dimension (axis 0), we
+            # can take the cumulative sum over the array. Requiring all time steps
+            # to be observed the valid indices are cumsum[window_size - 1 :].
+            # We then subtract the cumsum shifted by window_size to get the rolling
+            # sum. This is equivalent to convolving with a window of ones of size
+            # 5, but more efficient for large arrays.
+            # Alternatively, we could use scipy.signal.convolve, with mode='valid',
+            # and kernel = np.ones(
+            #   (window_size,) + (1,) * (pr_data.ndim - 1),
+            #   dtype=pr_data.dtype
+            # ) but the implementation below was faster for test on large arrays.
+            cumsum = np.cumsum(pr_data, axis=0)
+            rolling_sum = (
+                cumsum[window_size - 1 :] -
+                np.concatenate(
+                    (np.zeros((1,) + pr_data.shape[1:], dtype=pr_data.dtype),
+                    cumsum[:-window_size]),
+                    axis=0
+                )
+            )
+
+            # the shape of rolling_sum is (time - window_size + 1, lat, lon)
+            # therefor we need to adjust group_index accordingly by
+            # shifing it by window_size - 1
+            adjusted_group_index = group_index[window_size - 1 :]
+
+            # find group-wise maximum of the rolling sum result
+            rxnday = self._aggregate_by_group(
+                rolling_sum, adjusted_group_index, np.max
+            )
+
+        logger.debug(
+            "Computed rx%sday with shape %s",
+            window_size, rxnday.shape
+        )
+
+        return rxnday
+
+
     @check_supported_compute_frequencies
     def rx1day(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
         """
-        Monthly maximum 1-day precipitation
+        Maximum 1-day precipitation over period
         """
 
-        rx1day = self._aggregate_by_group(pr_data, group_index, np.max)
-        logger.debug(f"Computed rx1day with shape {rx1day.shape}")
+        rx1day = self.rxnday(
+            compute_fq=compute_fq,
+            pr_data=pr_data,
+            group_index=group_index,
+            threshold=1
+        )
 
         return rx1day
 
-    # TODO: make rxnday more general with n_days parameter
-    # I don't think the rolling sum is done correctly here.
+
     @check_supported_compute_frequencies
     def rx5day(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    None = None # not used
     ):
+        """Maximum 5-day precipitation over period
+
+        Let RR_kj be the precipitation amount for 5-day period ending at day
+        k in period j. Then,
+            RX5day_j = max(RR_kj) for all k in period j
         """
-        Monthly maximum 5-day precipitation
-        """
-
-        # Compute rolling 5-day sums
-        n_time = pr_data.shape[0]
-        rolling_sums = np.empty((n_time - 4,) + pr_data.shape[1:], dtype=pr_data.dtype)
-        for i in range(n_time - 4):
-            rolling_sums[i] = pr_data[i:i+5].sum(axis=0)
-
-        # Adjust group_index to match rolling_sums time dimension
-        if group_index is not None:
-            adjusted_group_index = group_index[2:-2]  # Centered adjustment
-        else:
-            adjusted_group_index = None
-
-        rx5day = self._aggregate_by_group(rolling_sums, adjusted_group_index, np.max)
-        logger.debug(f"Computed rx5day with shape {rx5day.shape}")
+        rx5day = self.rxnday(
+            compute_fq=compute_fq,
+            pr_data=pr_data,
+            group_index=group_index,
+            threshold=5
+        )
 
         return rx5day
 
     @check_supported_compute_frequencies
     def sdii(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
         """
         Simple daily intensity index (SDII): total precipitation on wet days
-        divided by number of wet days.
-        A wet day is defined as a day with precipitation >= threshold (e.g., 1 mm).
+        divided by number of wet days. A wet day is defined as a day with
+        precipitation >= 1 mm or 1/86400 kg m-2.
+
+        Parameters
+        ----------
+        threshold : float
+            Precipitation threshold to define a wet day.
         """
 
-        wet_days = pr_data >= 1.0
-        total_precip = self._aggregate_by_group(pr_data * wet_days, group_index, np.sum)
-        num_wet_days = self._aggregate_by_group(wet_days.astype(int), group_index, np.sum)
+        wet_days = pr_data >= fixed_threshold
+        total_precip = self._aggregate_by_group(
+            pr_data * wet_days, group_index, np.sum
+        )
+        num_wet_days = self._aggregate_by_group(
+            wet_days.astype(int), group_index, np.sum
+        )
 
         # Avoid division by zero
         sdii = np.where(num_wet_days > 0, total_precip / num_wet_days, 0)
@@ -364,15 +498,17 @@ class PythonBackend:
         self,
         compute_fq:     str,
         pr_data:        np.ndarray,
-        threshold:      float,
-        group_index:    np.ndarray
+        group_index:    np.ndarray,
+        threshold:      float
     ):
         """
         Number of days with precipitation >= threshold (e.g., 1 mm).
         """
 
         wet_days = pr_data >= threshold
-        rnnmm = self._aggregate_by_group(wet_days.astype(int), group_index, np.sum)
+        rnnmm = self._aggregate_by_group(
+            wet_days.astype(int), group_index, np.sum
+        )
         logger.debug(f"Computed R{threshold}mm with shape {rnnmm.shape}")
 
         return rnnmm
@@ -380,74 +516,82 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def r1mm(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
         """
         Annual total wet-day precipitation (sum of daily precipitation on days
-        with precipitation >= 1 mm).
+        with precipitation >= 1 mm or 1/86400 kg m-2).
         """
         r1mm = self.rnnmm(
             compute_fq=compute_fq,
             pr_data=pr_data,
-            threshold=1.0,
+            threshold=fixed_threshold,
             group_index=group_index,
         )
 
         return r1mm
-    
+
     @check_supported_compute_frequencies
     def r10mm(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
         """
-        Annual total precipitation on days with precipitation >= 10 mm.
+        Annual total precipitation on days with precipitation >= 10 mm
+        or 10/86400 kg m-2.
         """
         r10mm = self.rnnmm(
             compute_fq=compute_fq,
             pr_data=pr_data,
-            threshold=10.0,
+            threshold=fixed_threshold,
             group_index=group_index,
         )
 
         return r10mm
-    
+
     @check_supported_compute_frequencies
     def r20mm(
         self,
-        compute_fq:     str,
-        pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float
     ):
         """
-        Annual total precipitation on days with precipitation >= 20 mm.
+        Annual total precipitation on days with precipitation >= 20 mm
+        or 20/86400 kg m-2.
         """
         r20mm = self.rnnmm(
             compute_fq=compute_fq,
             pr_data=pr_data,
-            threshold=20.0,
+            threshold=fixed_threshold,
             group_index=group_index,
         )
 
         return r20mm
-
 
     @check_supported_compute_frequencies
     def prcptot(
         self,
         compute_fq:     str,
         pr_data:        np.ndarray,
-        group_index:    np.ndarray
+        group_index:    np.ndarray,
+        fixed_threshold:      float
     ):
         """
-        Annual sum of precipitation on days with precipitation >= 1 mm.
+        Annual sum of precipitation on days with precipitation >= 1 mm (or
+        1/86400 kg m-2).
         """
-        wet_days = pr_data >= 1.0
-        prcptot = self._aggregate_by_group(pr_data * wet_days, group_index, np.sum)
+        wet_days = pr_data >= fixed_threshold
+        prcptot = self._aggregate_by_group(
+            pr_data * wet_days, group_index, np.sum
+        )
         logger.debug(f"Computed PRCPTOT with shape {prcptot.shape}")
 
         return prcptot
