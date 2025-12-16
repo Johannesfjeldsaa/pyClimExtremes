@@ -138,9 +138,9 @@ def convert_units(
         return _degc_to_k(values)
 
     # Precipitation conversions
-    elif from_norm == "kgm-2s-1" and to_norm == "mmday-1":
+    elif from_norm == "kgm-2s-1" and to_norm == "mmd-1":
         return _kgm2s1_to_mmday1(values)
-    elif from_norm == "mmday-1" and to_norm == "kgm-2s-1":
+    elif from_norm == "mmd-1" and to_norm == "kgm-2s-1":
         return _mmday1_to_kgm2s1(values)
     # Accumulated precipitation conversions (no flux conversions due to lack of time unit awareness)
     elif from_norm == "kgm-2" and to_norm == "mm":
