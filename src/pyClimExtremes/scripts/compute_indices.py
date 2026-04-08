@@ -1,5 +1,6 @@
 import os
 import timeit
+import inspect
 from pathlib import Path
 import numpy as np
 from pyClimExtremes.indices.registry import (
@@ -24,6 +25,34 @@ from pyClimExtremes.io.save_utils import check_filepath
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
+
+_UNKNOWN_META_STRINGS = {"", "unknown", "none", "null", "nan", "na"}
+
+
+def _is_missing_or_unknown_meta(value) -> bool:
+    """Return True for metadata values that are missing or placeholder-ish."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in _UNKNOWN_META_STRINGS
+    return False
+
+
+def _validate_meta_value(meta_key: str, value) -> None:
+    """Validate metadata values before forwarding them into backend calls."""
+    if _is_missing_or_unknown_meta(value):
+        err_msg = (
+            f"Metadata key '{meta_key}' is missing or unknown (value={value!r})."
+        )
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
+    if meta_key in {"time", "lat"}:
+        arr = np.asarray(value)
+        if arr.size == 0:
+            err_msg = f"Metadata key '{meta_key}' is empty."
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
 
 # TODO:
 # output_file_template:
@@ -235,6 +264,15 @@ def compute_indices(
         for fq in fq_list:
             start_time_index_fq = timeit.default_timer()
 
+            # Inspect backend method signature once per index/frequency so we
+            # only validate/pass metadata args that are actually consumed.
+            backend_method = getattr(
+                inited_index_class.compute_backend,
+                index_class.backend_callable_name,
+            )
+            backend_sig = inspect.signature(inspect.unwrap(backend_method))
+            backend_params = set(backend_sig.parameters.keys())
+
             # Validate frequency is supported by this index
             if fq not in index_class.frequencies:
                 warn_msg = (
@@ -372,12 +410,29 @@ def compute_indices(
             # Compute index for each threshold value
             for threshold_value in thresholds_to_run:
                 compute_timer = timeit.default_timer()
+
+                compute_meta_kwargs = {}
+                meta_to_kwarg = {
+                    "time": "time_array",
+                    "time_units": "time_units",
+                    "calendar": "calendar",
+                    "lat": "lat",
+                }
+                for meta_key, kwarg_name in meta_to_kwarg.items():
+                    if kwarg_name not in backend_params:
+                        continue
+
+                    meta_val = meta.get(meta_key)
+                    _validate_meta_value(meta_key, meta_val)
+                    compute_meta_kwargs[kwarg_name] = meta_val
+
                 # start assemble compute kwargs per threshold
                 compute_kwargs = {
                     "compute_fq": fq,
                     "data_array": arrays,
                     "group_index": time_grouper["group_index"],
                 }
+                compute_kwargs.update(compute_meta_kwargs)
 
                 comp_info = (
                         f"Computing index '{index_class.index_id}' "

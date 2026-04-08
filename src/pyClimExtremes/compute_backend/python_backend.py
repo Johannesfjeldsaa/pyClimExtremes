@@ -344,16 +344,270 @@ class PythonBackend:
 
         return tr
 
+    def _first_run_start(
+        self,
+        cumulative_runs: np.ndarray,
+        t0: int,
+        t1: int,
+        min_run_length: int = 6,
+    ) -> np.ndarray:
+        """
+        Find the start index of the first run with length >= min_run_length
+        in cumulative_runs[t0:t1].
+
+        Parameters
+        ----------
+        cumulative_runs : np.ndarray
+            Shape (time, lat, lon) or (time, ...) — cumulative run lengths
+        t0 : int
+            Start index in time dimension
+        t1 : int
+            End index in time dimension (exclusive)
+        min_run_length : int, optional
+            Minimum run length to search for, by default 6
+
+        Returns
+        -------
+        np.ndarray
+            Shape (...) — indices of first run start, or -1 if not found
+        """
+        window = cumulative_runs[t0:t1] >= min_run_length
+        has_run = np.any(window, axis=0)
+        first_end_rel = np.argmax(window, axis=0)
+        first_end = t0 + first_end_rel
+        first_start = first_end - (min_run_length - 1)
+        return np.where(has_run, first_start, -1)
+
+    def _growing_season_length(
+        self,
+        tas_data: np.ndarray,
+        group_index: np.ndarray,
+        dates,
+        fixed_threshold: float,
+        run_len: int = 6,
+        first_half_months: tuple[int, ...] = (1, 2, 3, 4, 5, 6),
+    ) -> np.ndarray:
+        """
+        Compute growing season length per group using calendar-year grouping.
+
+        GSL is defined as days from the first run of >= run_len days with
+        tas > threshold in the configured first half-year months to the first
+        run of >= run_len days with tas < threshold in the complementary
+        second half-year months.
+
+        Parameters
+        ----------
+        tas_data : np.ndarray
+            Shape (time, lat, lon) — daily temperature data
+        group_index : np.ndarray
+            Shape (time,) — group assignment array (0, 1, 2, ...)
+        dates : iterable
+            Datetime objects from num2date, length = time dimension
+        fixed_threshold : float
+            Temperature threshold (5°C or equivalent in Kelvin)
+        run_len : int, optional
+            Minimum consecutive days to define a run, by default 6
+        first_half_months : tuple[int, ...], optional
+            Months considered first half for run start search. For NH use
+            Jan-Jun (default). For SH shifted Jul-Jun years, use Jul-Dec.
+
+        Returns
+        -------
+        np.ndarray
+            Shape (n_groups, lat, lon) — GSL values in days, NaN where undefined
+        """
+        warm = tas_data > fixed_threshold
+        cold = tas_data < fixed_threshold
+
+        warm_runs = self._count_consecutive_days(warm)
+        cold_runs = self._count_consecutive_days(cold)
+
+        n_groups = int(group_index.max()) + 1 if group_index.size else 0
+        out = np.full(
+            (n_groups,) + tas_data.shape[1:],
+            np.nan,
+            dtype=np.float32
+        )
+
+        months = np.fromiter((d.month for d in dates), dtype=int, count=len(dates))
+        first_half_months = set(first_half_months)
+
+        for g in range(n_groups):
+            idx = np.where(group_index == g)[0]
+            if idx.size == 0:
+                continue
+
+            group_months = months[idx]
+
+            # Split by configured half-year month sets.
+            is_first_half = np.isin(group_months, list(first_half_months))
+            first_half = idx[is_first_half]
+            second_half = idx[~is_first_half]
+
+            if first_half.size == 0 or second_half.size == 0:
+                continue
+
+            # Find first warm run in first half
+            start_idx = self._first_run_start(
+                warm_runs,
+                int(first_half[0]),
+                int(first_half[-1]) + 1,
+                min_run_length=run_len,
+            )
+
+            # Find first cold run in second half
+            end_idx = self._first_run_start(
+                cold_runs,
+                int(second_half[0]),
+                int(second_half[-1]) + 1,
+                min_run_length=run_len,
+            )
+
+            # GSL = end_start - start_start, only where both runs exist and end > start
+            valid = (start_idx >= 0) & (end_idx >= 0) & (end_idx > start_idx)
+            gsl = np.where(valid, end_idx - start_idx, np.nan)
+
+            out[g] = gsl.astype(np.float32)
+
+        return out
+
     @check_supported_compute_frequencies
     def gsl(
         self,
-        compute_fq:         str,
-        tas_data:           np.ndarray,
-        group_index:        np.ndarray,
-        fixed_threshold:    float
+        compute_fq: str,
+        tas_data: np.ndarray,
+        group_index: np.ndarray,
+        fixed_threshold: float,
+        time_array: np.ndarray = None,
+        time_units: str = None,
+        calendar: str = None,
+        lat: np.ndarray = None,
     ):
-        """Growing season length (number of days with Tmin > 5°C) for year"""
-        pass
+        """
+        Growing season length (gslETCCDI).
+
+        Computed as the number of days from the first occurrence of at least 6
+        consecutive days with daily mean temperature > 5°C (in first half of year,
+        typically Jan-Jun) to the first occurrence of at least 6 consecutive days
+        with daily mean temperature < 5°C (in second half of year, typically Jul-Dec).
+
+        Handles both Northern and Southern hemispheres:
+        - NH: Uses calendar year (Jan-Dec)
+        - SH: Uses shifted year (Jul-Jun) by reindexing
+
+        Parameters
+        ----------
+        compute_fq : str
+            Computation frequency, must be 'yr' (annual)
+        tas_data : np.ndarray
+            Shape (time, lat, lon) — daily mean temperature
+        group_index : np.ndarray
+            Shape (time,) — annual grouping indices
+        fixed_threshold : float
+            Temperature threshold (5.0 for °C or 278.15 for K)
+        time_array : np.ndarray, optional
+            Numeric time values for date decoding
+        time_units : str, optional
+            Time units string (e.g., 'days since 1970-01-01')
+        calendar : str, optional
+            Calendar type (default 'standard')
+        lat : np.ndarray, optional
+            Latitude array for hemisphere masking
+
+        Returns
+        -------
+        np.ndarray
+            Shape (n_groups, lat, lon) — GSL in days,
+            NaN where computation not possible
+        """
+        if compute_fq != "yr":
+            err_msg = f"GSL only supports annual frequency 'yr', got '{compute_fq}'"
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        # Decode time information
+        if time_array is None or time_units is None or calendar is None:
+            err_msg = (
+                "GSL requires time_array, time_units, and calendar parameters. "
+                "These must be passed from the index computation pipeline."
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        dates = num2date(time_array, units=time_units, calendar=calendar)
+        years = np.fromiter((d.year for d in dates), dtype=int, count=len(time_array))
+        months = np.fromiter((d.month for d in dates), dtype=int, count=len(time_array))
+
+        n_groups = int(group_index.max()) + 1 if group_index.size else 0
+        out = np.full((n_groups,) + tas_data.shape[1:], np.nan, dtype=np.float32)
+
+        # Determine hemispheres if latitude provided
+        if lat is not None:
+            nh_mask = lat >= 0
+            sh_mask = lat < 0
+        else:
+            # Default: treat all as NH if no lat provided
+            nh_mask = np.ones(tas_data.shape[1:], dtype=bool)
+            sh_mask = np.zeros(tas_data.shape[1:], dtype=bool)
+
+        # --- Northern Hemisphere: use normal calendar-year grouping ---
+        if np.any(nh_mask):
+            gsl_nh = self._growing_season_length(
+                tas_data=tas_data,
+                group_index=group_index,
+                dates=dates,
+                fixed_threshold=fixed_threshold,
+                first_half_months=(1, 2, 3, 4, 5, 6),
+            )
+            # Mask to NH only
+            if tas_data.ndim == 3:
+                gsl_nh[:, ~nh_mask, :] = np.nan
+            else:
+                # Handle 1D or 2D case if needed
+                pass
+            out = np.where(np.isnan(out), gsl_nh, out)
+
+        # --- Southern Hemisphere: use shifted Jul-Jun grouping ---
+        if np.any(sh_mask):
+            valid_years = (years.min(), years.max())
+            # Shifted year: months 7-12 stay in same year, months 1-6 go to previous year
+            years_gsl = years - ((12 - months) // 6)
+
+            # Subset to valid GSL years
+            inset = years_gsl >= valid_years[0]
+            tas_sh = tas_data[inset]
+            dates_sh = np.asarray(dates)[inset]
+            years_gsl_sh = years_gsl[inset]
+
+            # Build group index from shifted years
+            unique_gsl_years, inv_gsl = np.unique(years_gsl_sh, return_inverse=True)
+
+            gsl_sh = self._growing_season_length(
+                tas_data=tas_sh,
+                group_index=inv_gsl,
+                dates=dates_sh,
+                fixed_threshold=fixed_threshold,
+                first_half_months=(7, 8, 9, 10, 11, 12),
+            )
+
+            # Map shifted-year results back to normal annual output slots
+            unique_regular_years = np.unique(years)
+            regular_year_to_idx = {
+                int(y): i for i, y in enumerate(unique_regular_years)
+            }
+
+            for i, yg in enumerate(unique_gsl_years):
+                if int(yg) in regular_year_to_idx:
+                    out_idx = regular_year_to_idx[int(yg)]
+                    if tas_data.ndim == 3:
+                        tmp = np.full(out[out_idx].shape, np.nan, dtype=np.float32)
+                        tmp[sh_mask, :] = gsl_sh[i][sh_mask, :]
+                        out[out_idx] = np.where(
+                            np.isnan(out[out_idx]), tmp, out[out_idx]
+                        )
+
+        logger.debug(f"Computed GSL with shape {out.shape}")
+        return out
 
 
     # ---
