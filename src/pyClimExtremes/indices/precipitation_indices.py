@@ -6,7 +6,7 @@ from pyClimExtremes.logging.setup_logging import get_logger
 logger = get_logger(__name__)
 
 
-# not done yet - @register_index
+@register_index
 class CDDINDEX(BaseIndex):
     """
     Consecutive dry days (cddETCCDI).
@@ -30,7 +30,7 @@ class CDDINDEX(BaseIndex):
     backend_callable_name = "cdd"
 
 
-# not done yet - @register_index
+@register_index
 class CWDINDEX(BaseIndex):
     """
     Consecutive wet days (cwdETCCDI).

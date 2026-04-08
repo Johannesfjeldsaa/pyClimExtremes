@@ -104,7 +104,7 @@ class TRINDEX(BaseIndex):
     backend_callable_name = "tr"
 
 
-# Not Register bcs it is not implemented yet
+@register_index
 class GSLIndex(BaseIndex):
     """
     Growing season length (gslETCCDI).
