@@ -136,6 +136,9 @@ class BaseIndex:
         data_array:         np.ndarray | dict[str, np.ndarray],
         group_index:        np.ndarray,
         time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
         fixed_threshold:    dict[str, float] | None = None,
     ):
         """Compute the index using backend method specified by
@@ -220,6 +223,12 @@ class BaseIndex:
         # Add optional arrays if provided
         if time_array is not None:
             kwargs["time_array"] = time_array
+        if time_units is not None:
+            kwargs["time_units"] = time_units
+        if calendar is not None:
+            kwargs["calendar"] = calendar
+        if lat is not None:
+            kwargs["lat"] = lat
 
         # check if filtering is needed for this kwarg-index pair
         # Log unfiltered kwargs
@@ -274,6 +283,9 @@ class ThresholdIndex(BaseIndex):
         group_index:        np.ndarray,
         threshold:          float,
         time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
         threshold_array:    np.ndarray | None = None,
     ):
         """Compute a threshold-based index with optional custom threshold.
@@ -345,6 +357,12 @@ class ThresholdIndex(BaseIndex):
         # Add optional arrays if provided
         if time_array is not None:
             kwargs["time_array"] = time_array
+        if time_units is not None:
+            kwargs["time_units"] = time_units
+        if calendar is not None:
+            kwargs["calendar"] = calendar
+        if lat is not None:
+            kwargs["lat"] = lat
         if threshold is not None:
             kwargs["threshold"] = threshold
         if threshold_array is not None:
