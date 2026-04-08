@@ -1,0 +1,12 @@
+numpy
+scipy
+netCDF4
+matplotlib
+xarray
+
+[dev]
+pytest
+black
+flake8
+isort
+mypy

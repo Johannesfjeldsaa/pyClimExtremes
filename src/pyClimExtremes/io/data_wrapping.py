@@ -6,7 +6,7 @@ import numpy as np
 from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
     input_var_str_normalize
 )
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 from reversclim.utils.preprocessing.variables.extremes.indices.units_utils import (
     validate_input_units,
     INPUT_VAR_ALLOWED_INPUT_UNITS,

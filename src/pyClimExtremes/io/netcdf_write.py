@@ -8,7 +8,7 @@ from reversclim.utils.preprocessing.variables.extremes.indices.base_index import
     BaseIndex,
 )
 
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 

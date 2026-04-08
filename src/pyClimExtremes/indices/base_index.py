@@ -10,7 +10,7 @@ from reversclim.utils.preprocessing.variables.extremes.compute_backend.backend_r
 from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
     INPUT_VAR_ALIASES
 )
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 

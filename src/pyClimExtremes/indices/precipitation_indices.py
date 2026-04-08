@@ -5,7 +5,7 @@ from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
 from reversclim.utils.preprocessing.variables.extremes.indices.base_index import (
     BaseIndex, ThresholdIndex
 )
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -19,8 +19,8 @@ from reversclim.utils.preprocessing.variables.extremes.io.data_wrapping import (
 from reversclim.utils.preprocessing.variables.extremes.io.netcdf_write import (
     build_filename, write_index_netcdf
 )
-from general_backend.utils.save_utils import check_filepath
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.io.save_utils import check_filepath
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 

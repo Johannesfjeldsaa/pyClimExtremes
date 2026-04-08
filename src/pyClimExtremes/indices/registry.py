@@ -1,4 +1,4 @@
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 

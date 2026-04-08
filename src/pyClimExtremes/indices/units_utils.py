@@ -1,6 +1,6 @@
 import numpy as np
 
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 from .registry import input_var_str_normalize
 
 logger = get_logger(__name__)
