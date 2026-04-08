@@ -1,22 +1,23 @@
 import os
 import timeit
 from pathlib import Path
-from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
+import numpy as np
+from pyClimExtremes.indices.registry import (
     resolve_indices,
     resolve_frequencies,
     input_var_str_normalize,
     INPUT_VAR_ALIASES,
 )
-from reversclim.utils.preprocessing.variables.extremes.indices.units_utils import (
+from pyClimExtremes.indices.units_utils import (
     validate_input_units,
     unit_str_normalize,
     convert_units,
 )
-from reversclim.utils.preprocessing.variables.extremes.io.data_wrapping import (
+from pyClimExtremes.io.data_wrapping import (
     prepare_inputs_and_meta,
     prepare_time_groupings,
 )
-from reversclim.utils.preprocessing.variables.extremes.io.netcdf_write import (
+from pyClimExtremes.io.netcdf_write import (
     build_filename, write_index_netcdf
 )
 from pyClimExtremes.io.save_utils import check_filepath

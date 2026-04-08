@@ -1,10 +1,6 @@
 import numpy as np
-from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
-    register_index
-)
-from reversclim.utils.preprocessing.variables.extremes.indices.base_index import (
-    BaseIndex, ThresholdIndex
-)
+from pyClimExtremes.indices.registry import register_index
+from pyClimExtremes.indices.base_index import BaseIndex, ThresholdIndex
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)

@@ -4,10 +4,7 @@ from typing import Any
 from netCDF4 import Dataset
 import numpy as np
 
-from reversclim.utils.preprocessing.variables.extremes.indices.base_index import (
-    BaseIndex,
-)
-
+from pyClimExtremes.indices.base_index import BaseIndex
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)

@@ -7,9 +7,7 @@ from netCDF4 import num2date
 from scipy.signal import convolve # use signal convolve for n-dim arrays
 
 from pyClimExtremes.logging.setup_logging import get_logger
-from reversclim.utils.preprocessing.variables.extremes.compute_backend.backend_registry import (
-    register_backend,
-)
+from pyClimExtremes.compute_backend.backend_registry import register_backend
 
 logger = get_logger(__name__)
 

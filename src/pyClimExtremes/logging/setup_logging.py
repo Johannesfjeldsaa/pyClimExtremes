@@ -47,7 +47,7 @@ from pyClimExtremes import PACKAGE_LOGGER_NAME
 
 def get_logger(name: str | None = None) -> logging.Logger:
     """Return a package-scoped logger.
-    Example: get_logger('module') -> 'reversclim.module'
+    Example: get_logger('module') -> 'pyClimExtremes.module'
 
     Parameters
     ----------

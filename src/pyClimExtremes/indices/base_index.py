@@ -4,12 +4,8 @@ from typing import Any
 import inspect
 import numpy as np
 
-from reversclim.utils.preprocessing.variables.extremes.compute_backend.backend_registry import (
-    get_compute_backend,
-)
-from reversclim.utils.preprocessing.variables.extremes.indices.registry import (
-    INPUT_VAR_ALIASES
-)
+from pyClimExtremes.compute_backend.backend_registry import get_compute_backend
+from pyClimExtremes.indices.registry import INPUT_VAR_ALIASES
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
