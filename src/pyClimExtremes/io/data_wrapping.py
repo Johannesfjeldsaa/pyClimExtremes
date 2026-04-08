@@ -298,10 +298,6 @@ def prepare_time_groupings(
     ``np.unique`` and ``time_out`` are mean-of-period time coordinates.
     """
 
-    from reversclim.utils.preprocessing.variables.extremes.compute_backend.backend_registry import (
-        get_compute_backend,
-    )
-
     backend = get_compute_backend(compute_backend)
 
     time_array = metadata.get("time")
