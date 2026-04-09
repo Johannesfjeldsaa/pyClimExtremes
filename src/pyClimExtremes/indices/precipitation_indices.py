@@ -1,6 +1,9 @@
+import inspect
 import numpy as np
 from pyClimExtremes.indices.registry import register_index
-from pyClimExtremes.indices.base_index import BaseIndex, ThresholdIndex
+from pyClimExtremes.indices.base_index import (
+    BaseIndex, ThresholdIndex, QuantileThresholdIndex
+)
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
@@ -255,3 +258,55 @@ class SDIIINDEX(BaseIndex):
     required_vars = ["pr"]
     frequencies = ["yr"]
     backend_callable_name = "sdii"
+
+
+
+
+@register_index
+class R95pTOTIndex(QuantileThresholdIndex):
+    """
+    Contribution of very wet days to annual total precipitation (r95pTOTETCCDI).
+
+    Percentage contribution: 100 × (R95p / PRCPTOT)
+
+    Uses the 95th percentile threshold as the quantile threshold.
+    """
+
+    index_type = "precipitation"
+    index_id = "r95pTOTETCCDI"
+    index_aliases = ["r95ptot", "R95pTOT", "r95pTOTETCCDI"]
+    index_long_name = "Contribution of very wet days to total precipitation (%)"
+    index_units = "%"
+    unit_after_aggregation = {
+        "mm d-1": "%",
+        "kg m-2 s-1": "%"
+    }
+    required_vars = ["pr"]
+    frequencies = ["yr"]
+    backend_callable_name = "r95p_tot"
+    fixed_threshold = None
+
+
+@register_index
+class R99pTOTIndex(QuantileThresholdIndex):
+    """
+    Contribution of extremely wet days to annual total precipitation (r99pTOTETCCDI).
+
+    Percentage contribution: 100 × (R99p / PRCPTOT)
+
+    Uses the 99th percentile threshold as the quantile threshold.
+    """
+
+    index_type = "precipitation"
+    index_id = "r99pTOTETCCDI"
+    index_aliases = ["r99ptot", "R99pTOT", "r99pTOTETCCDI"]
+    index_long_name = "Contribution of extremely wet days to total precipitation (%)"
+    index_units = "%"
+    unit_after_aggregation = {
+        "mm d-1": "%",
+        "kg m-2 s-1": "%"
+    }
+    required_vars = ["pr"]
+    frequencies = ["yr"]
+    backend_callable_name = "r99p_tot"
+    fixed_threshold = None
