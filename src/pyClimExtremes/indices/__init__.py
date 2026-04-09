@@ -7,6 +7,7 @@ INDEX_REGISTRY for discovery and computation.
 # Import all index modules to trigger @register_index decorators
 from .temperature_indices import *
 from .precipitation_indices import *
+from .quantile_indices import *
 
 # Expose only core workflow functions
 from .registry import (

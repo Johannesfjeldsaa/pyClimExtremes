@@ -390,3 +390,327 @@ class ThresholdIndex(BaseIndex):
 
         return backend_method(**filtered_kwargs)
 
+class QuantileIndex(BaseIndex):
+    """Index subclass for quantile-based indices.
+
+    Indexes that are based on quantiles of the data:
+    * tn10p
+    * tn90p
+    * tx10p
+    * tx90p
+    * R95p(tot)
+    * R99p(tot)
+    And then further used for threshold-based indices, e.g.:
+        WSDI (Warm Spell Duration Index) which measures prolonged heat events.
+        Here we need the 90th percentile of daily maximum temperature (tx90p)
+        as the threshold for defining a "warm day".
+        The WSDI is then calculated as the number of days
+        in spells of at least 6 consecutive warm days.
+
+    In addition to BaseIndex metadata, QuantileIndex holds metadata such as:
+    * quantile value
+    * baseline period for quantile calculation
+    """
+
+    quantile: float = 0.0                   # e.g., 0.1 for 10th percentile
+    baseline_period: tuple = (1981, 2010)   # (start_year, end_year)
+
+    def __init__(self, compute_backend: str, **kwargs: dict[str, Any]):
+        super().__init__(compute_backend, **kwargs)
+        self.thresholds_by_doy: np.ndarray | None = None
+
+    def compute(
+        self,
+        compute_fq:         str,
+        data_array:         np.ndarray | dict[str, np.ndarray],
+        group_index:        np.ndarray,
+        time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
+        base_period_mask:   np.ndarray | None = None,
+        window_size:        int = 5,
+        bootstrap_samples:  int = 1000,
+        random_seed:        int | None = None,
+    ):
+        """Compute quantile-based index with optional bootstrap for base period.
+
+        For temperature indices, computes yearly exceedance frequencies using:
+        - Fixed daily thresholds (5-day window percentiles) for years outside base period
+        - Bootstrap-averaged exceedance frequencies for years inside base period
+
+        For precipitation indices, computes a single quantile value per grid point.
+
+        Parameters
+        ----------
+        compute_fq : str
+            The computation frequency (e.g., 'mon', 'yr').
+        data_array : np.ndarray | dict[str, np.ndarray]
+            Input data array(s).
+        group_index : np.ndarray
+            Time grouping indices for aggregation (maps daily times to years/months).
+        time_array : np.ndarray | None, optional
+            Time array, passed to backend if needed.
+        base_period_mask : np.ndarray | None, optional
+            Boolean array of shape (num_years,) marking base-period years.
+            Required for temperature quantiles with bootstrap.
+        window_size : int, optional
+            Size of rolling window for daily threshold estimation, by default 5
+        bootstrap_samples : int, optional
+            Number of bootstrap resamples for years in base period, by default 1000
+        random_seed : int | None, optional
+            Seed for bootstrap random number generator
+
+        Returns
+        -------
+        np.ndarray
+            Computed index values (yearly exceedance frequencies for temperature,
+            scalar quantile for precipitation).
+        """
+        # Validate and extract data
+        validated_data = validate_data_array(data_array, self.required_vars)
+
+        # Get the backend method dynamically
+        if not self.backend_callable_name:
+            err_msg = (
+                f"backend_callable_name not set for {self.__class__.__name__}"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        try:
+            backend_method = getattr(self.compute_backend, self.backend_callable_name)
+        except AttributeError as e:
+            err_msg = (
+                f"Backend '{self.backend_name}' has no method "
+                f"'{self.backend_callable_name}'"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise AttributeError(err_msg) from e
+
+        # Build kwargs for the backend method
+        kwargs = {
+            "compute_fq": compute_fq,
+            "group_index": group_index,
+            "quantile": self.quantile,
+        }
+
+        # Add data with backend-friendly variable names ({var}_data)
+        if len(self.required_vars) == 1:
+            var_name = self.required_vars[0]
+            backend_var_name = f"{var_name}_data"
+            kwargs[backend_var_name] = validated_data
+        else:
+            if not isinstance(validated_data, dict):
+                err_msg = (
+                    "Validated data should be a dict when multiple "
+                    "required variables are specified."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise TypeError(err_msg)
+            for var_name, arr in validated_data.items():
+                backend_var_name = f"{var_name}_data"
+                kwargs[backend_var_name] = arr
+
+        # Add optional parameters for temperature quantiles
+        if self.index_type == "temperature":
+            if base_period_mask is None:
+                err_msg = "base_period_mask is required for temperature quantile indices"
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+            kwargs["base_period_mask"] = base_period_mask
+            kwargs["window_size"] = window_size
+            kwargs["bootstrap_samples"] = bootstrap_samples
+            if random_seed is not None:
+                kwargs["random_seed"] = random_seed
+            if time_array is not None:
+                kwargs["time_array"] = time_array
+            if time_units is not None:
+                kwargs["time_units"] = time_units
+            if calendar is not None:
+                kwargs["calendar"] = calendar
+
+        # Add optional arrays if provided
+        if lat is not None:
+            kwargs["lat"] = lat
+
+        # Log unfiltered kwargs
+        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
+
+        # Filter kwargs to only include parameters the backend method accepts
+        unwrapped_method = inspect.unwrap(backend_method)
+        sig = inspect.signature(unwrapped_method)
+
+        logger.debug(
+            "Unwrapped method signature parameters: %s",
+            list(sig.parameters.keys())
+        )
+
+        # Filter to explicit parameters
+        filtered_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in sig.parameters
+        }
+
+        # Log what we're passing
+        logger.debug(
+            "Calling %s with kwargs: %s",
+            self.backend_callable_name, list(filtered_kwargs.keys())
+        )
+
+        result = backend_method(**filtered_kwargs)
+
+        # For temperature quantiles, backend may return dict with 'result' and 'thresholds'
+        if isinstance(result, dict):
+            if 'thresholds' in result:
+                self.thresholds_by_doy = result['thresholds']
+                result = result['result']
+
+        return result
+
+
+class QuantileThresholdIndex(BaseIndex):
+    """Index subclass for indices that use quantile thresholds.
+
+    These are indices that depend on pre-computed quantile thresholds.
+    Examples:
+    * WSDI (Warm Spell Duration Index) uses tx90p as threshold
+    * CSDI (Cold Spell Duration Index) uses tn10p as threshold
+
+    The thresholds can be passed as:
+    1. A pre-computed array via quantile_thresholds parameter
+    2. By reference to a QuantileIndex instance via quantile_index parameter
+    """
+
+    def compute(
+        self,
+        compute_fq:         str,
+        data_array:         np.ndarray | dict[str, np.ndarray],
+        group_index:        np.ndarray,
+        time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
+        quantile_thresholds: np.ndarray | None = None,
+        quantile_index:     'QuantileIndex | None' = None,
+    ):
+        """Compute a threshold-based index using quantile thresholds.
+
+        Parameters
+        ----------
+        compute_fq : str
+            The computation frequency (e.g., 'mon', 'yr').
+        data_array : np.ndarray | dict[str, np.ndarray]
+            Input data array(s).
+        group_index : np.ndarray
+            Time grouping indices for aggregation.
+        time_array : np.ndarray | None, optional
+            Time array, passed to backend if needed.
+        quantile_thresholds : np.ndarray | None, optional
+            Pre-computed threshold array (shape: 365/366 × lat × lon for daily, or scalar).
+        quantile_index : QuantileIndex | None, optional
+            QuantileIndex instance to use; will use its cached thresholds_by_doy.
+
+        Returns
+        -------
+        np.ndarray
+            Computed index values at the requested frequency.
+        """
+        # Get thresholds from either quantile_index or quantile_thresholds
+        if quantile_index is not None:
+            thresholds_array = quantile_index.thresholds_by_doy
+            if thresholds_array is None:
+                err_msg = (
+                    f"quantile_index '{quantile_index.index_id}' has not been computed "
+                    "yet; thresholds_by_doy is None."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+        elif quantile_thresholds is not None:
+            thresholds_array = quantile_thresholds
+        else:
+            err_msg = (
+                "Either quantile_thresholds or quantile_index must be provided"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        # Validate and extract data
+        validated_data = validate_data_array(data_array, self.required_vars)
+
+        # Get the backend method dynamically
+        if not self.backend_callable_name:
+            err_msg = (
+                f"backend_callable_name not set for {self.__class__.__name__}"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        try:
+            backend_method = getattr(self.compute_backend, self.backend_callable_name)
+        except AttributeError as e:
+            err_msg = (
+                f"Backend '{self.backend_name}' has no method "
+                f"'{self.backend_callable_name}'"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise AttributeError(err_msg) from e
+
+        # Build kwargs for the backend method
+        kwargs = {"compute_fq": compute_fq, "group_index": group_index}
+
+        # Add data with backend-friendly variable names ({var}_data)
+        if len(self.required_vars) == 1:
+            var_name = self.required_vars[0]
+            backend_var_name = f"{var_name}_data"
+            kwargs[backend_var_name] = validated_data
+        else:
+            if not isinstance(validated_data, dict):
+                err_msg = (
+                    "Validated data should be a dict when multiple "
+                    "required variables are specified."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise TypeError(err_msg)
+            for var_name, arr in validated_data.items():
+                backend_var_name = f"{var_name}_data"
+                kwargs[backend_var_name] = arr
+
+        # Pass threshold array
+        kwargs["threshold_array"] = thresholds_array
+
+        # Add optional arrays if provided
+        if time_array is not None:
+            kwargs["time_array"] = time_array
+        if time_units is not None:
+            kwargs["time_units"] = time_units
+        if calendar is not None:
+            kwargs["calendar"] = calendar
+        if lat is not None:
+            kwargs["lat"] = lat
+
+        # Log unfiltered kwargs
+        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
+
+        # Filter kwargs to only include parameters the backend method accepts
+        unwrapped_method = inspect.unwrap(backend_method)
+        sig = inspect.signature(unwrapped_method)
+
+        logger.debug(
+            "Unwrapped method signature parameters: %s",
+            list(sig.parameters.keys())
+        )
+
+        # Filter to explicit parameters
+        filtered_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in sig.parameters
+        }
+
+        # Log what we're passing
+        logger.debug(
+            "Calling %s with kwargs: %s",
+            self.backend_callable_name, list(filtered_kwargs.keys())
+        )
+
+        return backend_method(**filtered_kwargs)
