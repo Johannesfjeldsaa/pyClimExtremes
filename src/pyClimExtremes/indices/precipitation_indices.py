@@ -2,7 +2,7 @@ import inspect
 import numpy as np
 from pyClimExtremes.indices.registry import register_index
 from pyClimExtremes.indices.base_index import (
-    BaseIndex, ThresholdIndex, QuantileThresholdIndex
+    BaseIndex, SpellDurationIndex, ThresholdIndex, QuantileThresholdIndex
 )
 from pyClimExtremes.logging.setup_logging import get_logger
 
@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 
 
 @register_index
-class CDDINDEX(BaseIndex):
+class CDDINDEX(SpellDurationIndex):
     """
     Consecutive dry days (cddETCCDI).
     """
@@ -31,10 +31,11 @@ class CDDINDEX(BaseIndex):
     required_vars = ["pr"]
     frequencies = ["yr"]
     backend_callable_name = "cdd"
+    spells_can_span_groups = True
 
 
 @register_index
-class CWDINDEX(BaseIndex):
+class CWDINDEX(SpellDurationIndex):
     """
     Consecutive wet days (cwdETCCDI).
     """
@@ -55,6 +56,7 @@ class CWDINDEX(BaseIndex):
     required_vars = ["pr"]
     frequencies = ["yr"]
     backend_callable_name = "cwd"
+    spells_can_span_groups = True
 
 
 @register_index

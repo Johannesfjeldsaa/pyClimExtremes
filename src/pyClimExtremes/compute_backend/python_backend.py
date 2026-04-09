@@ -122,7 +122,6 @@ class PythonBackend:
         uniq, inv = np.unique(group_key, return_inverse=True)
         return uniq, inv
 
-
     def _aggregate_by_group(
         self,
         data: np.ndarray,
@@ -130,7 +129,6 @@ class PythonBackend:
         reducer,
     ) -> np.ndarray:
         """Aggregate over the time dimension using provided group mapping."""
-
         if group_index is None:
             raise ValueError("group_index is required for aggregation")
 
@@ -139,7 +137,6 @@ class PythonBackend:
         out = np.empty(out_shape, dtype=data.dtype)
 
         for i in range(n_groups):
-            # assuming axis 0 is time we reduce over that axis
             out[i] = reducer(data[group_index == i], axis=0)
 
         return out
@@ -147,26 +144,122 @@ class PythonBackend:
 
     def _count_consecutive_days(
         self,
-        bool_array: np.ndarray
+        bool_array: np.ndarray,
+        group_index: np.ndarray | None = None,
+        spells_can_span_groups: bool = False,
     ) -> np.ndarray:
-        # Initialize the output array
-        cumulative = np.zeros_like(bool_array, dtype=np.int32)
+        """
+        Count consecutive True values across time dimension.
 
-        # Initialize a tracker for the current run length for each spatial point
+        Parameters:
+        -----------
+        bool_array : np.ndarray
+            Boolean array with shape (time, ...)
+        group_index : np.ndarray | None, default None
+            Optional array mapping each time index to a group. If None,
+            no group boundary handling is applied.
+        spells_can_span_groups : bool, default False  # ← Note: Different default from R
+            If False, reset counters at group boundaries. Has no effect
+            when group_index is None.
+
+        Returns:
+        --------
+        cumulative : np.ndarray
+            Array of cumulative counts with same shape as bool_array.
+        """
+        cumulative = np.zeros_like(bool_array, dtype=np.int32)
         current_run = np.zeros(bool_array.shape[1:], dtype=np.int32)
 
-        # Iterate over the time dimension
         for t in range(bool_array.shape[0]):
-            # Logic:
-            # If bool_array[t] is True (1): current_run becomes current_run + 1
-            # If bool_array[t] is False (0): current_run becomes 0
-            # This can be vectorized as: (current_run + 1) * bool_array[t]
+            is_event = bool_array[t]
 
-            current_run = (current_run + 1) * bool_array[t]
+            # Check for group boundary (skip first timestep)
+            if t > 0 and group_index is not None and not spells_can_span_groups:
+                group_changed = group_index[t] != group_index[t - 1]
+                # Broadcast group_changed to match spatial dims if needed
+                if group_changed.ndim == 0:  # scalar
+                    current_run = np.where(group_changed, 0, current_run)
+                elif group_changed.shape != current_run.shape:
+                    # Broadcast to spatial dimensions
+                    if current_run.ndim == 2:  # (spatial_x, spatial_y)
+                        current_run = np.where(group_changed[..., np.newaxis], 0, current_run)
+                    else:
+                        current_run = np.where(group_changed, 0, current_run)
+                else:
+                    current_run = np.where(group_changed, 0, current_run)
+
+            # Update run length
+            current_run = (current_run + 1) * is_event
             cumulative[t] = current_run
 
         return cumulative
 
+    def _max_spell_length_by_group(
+        self,
+        bool_array: np.ndarray,
+        group_index: np.ndarray,
+        spells_can_span_groups: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return the longest spell ending in each group.
+
+        When `spells_can_span_groups` is True, spells are assigned to the group
+        containing the spell end date.
+
+        Parameters
+        ----------
+        bool_array : np.ndarray
+            Boolean array with shape (time, ...)
+        group_index : np.ndarray
+            Array mapping each time index to a group.
+        spells_can_span_groups : bool
+            If True, spells can span group boundaries.
+
+        Returns
+        -------
+        max_spell : np.ndarray
+            Array of maximum spell lengths for each group.
+        has_spell_end : np.ndarray
+            Boolean array indicating if a spell ended in each group.
+        """
+        n_groups = int(group_index.max()) + 1 if group_index.size else 0
+        out_shape = (n_groups,) + tuple(bool_array.shape[1:])
+        max_spell = np.zeros(out_shape, dtype=np.int32)
+        has_spell_end = np.zeros(out_shape, dtype=bool)
+        current_run = np.zeros(bool_array.shape[1:], dtype=np.int32)
+
+        for t in range(bool_array.shape[0]):
+            current_group = int(group_index[t])
+            in_spell = bool_array[t]
+
+            if (
+                t > 0
+                and not spells_can_span_groups
+                and group_index[t] != group_index[t - 1]
+            ):
+                current_run[...] = 0
+
+            current_run = np.where(in_spell, current_run + 1, 0)
+
+            is_last_timestep = t == bool_array.shape[0] - 1
+            next_group_changes = (
+                False if is_last_timestep else group_index[t + 1] != group_index[t]
+            )
+            next_is_false = False if is_last_timestep else ~bool_array[t + 1]
+
+            if spells_can_span_groups:
+                spell_ends = in_spell & (is_last_timestep | next_is_false)
+            else:
+                spell_ends = in_spell & (is_last_timestep | next_group_changes | next_is_false)
+
+            if np.any(spell_ends):
+                ended_lengths = np.where(spell_ends, current_run, 0)
+                max_spell[current_group] = np.maximum(
+                    max_spell[current_group],
+                    ended_lengths,
+                )
+                has_spell_end[current_group] |= spell_ends
+
+        return max_spell, has_spell_end
 
     @check_supported_compute_frequencies
     def txx(
@@ -441,9 +534,9 @@ class PythonBackend:
 
             both_found = (start_idx >= 0) & (end_idx >= 0) & (end_idx > start_idx)
             warm_only = (start_idx >= 0) & (end_idx < 0)
-            
+
             gsl_standard = end_idx - start_idx
-            
+
             if year_end_idx >= 0:
                 gsl_year_round = year_end_idx - start_idx
             else:
@@ -919,14 +1012,15 @@ class PythonBackend:
             quantile, window_size, bootstrap_samples, random_seed
         )
 
-
     @check_supported_compute_frequencies
     def cdd(
         self,
-        compute_fq:         str,
-        pr_data:            np.ndarray,
-        group_index:        np.ndarray,
-        fixed_threshold:    float
+        compute_fq: str,
+        pr_data: np.ndarray,
+        group_index: np.ndarray,
+        fixed_threshold: float,
+        spells_can_span_groups: bool,
+        mask: np.ndarray | None = None,
     ):
         """
         Consecutive dry days (cddETCCDI) within period.
@@ -935,18 +1029,28 @@ class PythonBackend:
         Count the largest number of consecutive days where RRij < 1mm (or
         1/86400 kg m-2) within period j.
         """
+        # Handle NaN values - exclude from consecutive counting
+        valid_data = ~np.isnan(pr_data)
+        is_dry = (pr_data < fixed_threshold) & valid_data
 
-        # indicate which days are dry
-        is_dry = pr_data < fixed_threshold
+        max_cdd, has_spell_end = self._max_spell_length_by_group(
+            is_dry,
+            group_index=group_index,
+            spells_can_span_groups=spells_can_span_groups,
+        )
 
-        # count consecutive dry days
-        cdd = self._count_consecutive_days(is_dry)
+        result = max_cdd.astype(np.float32, copy=False)
+        if spells_can_span_groups:
+            all_dry_in_group = self._aggregate_by_group(is_dry, group_index, np.all)
+            result = np.where(all_dry_in_group & ~has_spell_end, np.nan, result)
 
-        max_cdd = self._aggregate_by_group(cdd, group_index, np.max)
+        # Apply data quality mask (like R's na.mask)
+        if mask is not None:
+            result = result * mask
+            result[mask == 0] = np.nan  # Explicitly set to NA for quality mask
 
-        logger.debug(f"Computed CDD with shape {max_cdd.shape}")
-
-        return max_cdd
+        logger.debug(f"Computed CDD with shape {result.shape}")
+        return result
 
     @check_supported_compute_frequencies
     def cwd(
@@ -954,7 +1058,8 @@ class PythonBackend:
         compute_fq:         str,
         pr_data:            np.ndarray,
         group_index:        np.ndarray,
-        fixed_threshold:    float
+        fixed_threshold:    float,
+        spells_can_span_groups: bool,
     ):
         """
         Consecutive wet days (cwdETCCDI).
@@ -965,16 +1070,22 @@ class PythonBackend:
         """
 
         # indicate which days are wet
-        is_wet = pr_data >= fixed_threshold
+        is_wet = (pr_data >= fixed_threshold) & ~np.isnan(pr_data)
 
-        # count consecutive wet days
-        cwd = self._count_consecutive_days(is_wet)
+        max_cwd, has_spell_end = self._max_spell_length_by_group(
+            is_wet,
+            group_index=group_index,
+            spells_can_span_groups=spells_can_span_groups,
+        )
 
-        max_cwd = self._aggregate_by_group(cwd, group_index, np.max)
+        result = max_cwd.astype(np.float32, copy=False)
+        if spells_can_span_groups:
+            all_wet_in_group = self._aggregate_by_group(is_wet, group_index, np.all)
+            result = np.where(all_wet_in_group & ~has_spell_end, np.nan, result)
 
-        logger.debug(f"Computed CWD with shape {max_cwd.shape}")
+        logger.debug(f"Computed CWD with shape {result.shape}")
 
-        return max_cwd
+        return result
 
 
     @check_supported_compute_frequencies
