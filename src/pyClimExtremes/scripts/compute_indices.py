@@ -119,6 +119,12 @@ def compute_indices(
           with a warning.
           * Usage of index aliases as keys is also supported, e.g., 'SU', 'su'
           or 'suETCCDI' is acceptable for the SUINDEX.
+        - 'spells_can_span_groups': dict mapping spell-duration index IDs to
+            boolean values.
+            Example: {'cdd': False, 'cwdETCCDI': True} overrides the per-index
+            class defaults for spell handling.
+            * If an index is not a spell-duration index, the value is ignored.
+            * Usage of index aliases as keys is also supported.
         - 'backend_kwargs': dict of additional kwargs to pass to the compute
             backend when initializing index classes.
     """
@@ -131,8 +137,9 @@ def compute_indices(
     # resolve and check indices and frequencies
     index_list = resolve_indices(indices)
 
-    # Extract threshold and backend_kwargs from kwargs
+    # Extract threshold, spell options, and backend kwargs from kwargs
     threshold_dict = kwargs.get('threshold', {})
+    spells_can_span_groups_dict = kwargs.get('spells_can_span_groups', {})
     backend_kwargs = kwargs.get('backend_kwargs', {})
 
     # Filter out ThresholdIndex with default_threshold = None
@@ -407,6 +414,51 @@ def compute_indices(
                 thresholds_to_run = [None]
             units_and_thresholds_elapsed_time.append(timeit.default_timer() - units_and_thresholds_timer)
 
+            # Spell handling - there is a difference between BaseIndex
+            # and SpellDurationIndex index_classes.
+            # * SpellDurationIndex: has attribute 'spells_can_span_groups'
+            # that controls whether to allow spells to span group boundaries
+            # (e.g., years).
+            is_spell_duration_index = hasattr(index_class, 'spells_can_span_groups')
+
+            spell_span_groups_value = None
+            if is_spell_duration_index:
+                spell_span_groups_value = spells_can_span_groups_dict.get(
+                    index_class.index_id,
+                    None,
+                )
+                if (
+                    spell_span_groups_value is None and
+                    hasattr(index_class, 'index_aliases')
+                ):
+                    for alias in index_class.index_aliases:
+                        spell_span_groups_value = spells_can_span_groups_dict.get(alias, None)
+                        if spell_span_groups_value is not None:
+                            break
+
+                if spell_span_groups_value is None:
+                    spell_span_groups_value = getattr(
+                        index_class,
+                        'spells_can_span_groups',
+                    )
+
+                if not isinstance(spell_span_groups_value, bool):
+                    err_msg = (
+                        "spells_can_span_groups must resolve to a boolean "
+                        f"for index '{index_class.index_id}', got "
+                        f"{type(spell_span_groups_value)}."
+                    )
+                    logger.error(err_msg, stack_info=True)
+                    raise ValueError(err_msg)
+                logger.debug(
+                    "Resolved spells_can_span_groups for '%s': %s "
+                    "(source: %s)",
+                    index_class.index_id,
+                    spell_span_groups_value,
+                    "user_override" if spell_span_groups_value != getattr(index_class, 'spells_can_span_groups')
+                    else "class_default"
+                )
+
             # Compute index for each threshold value
             for threshold_value in thresholds_to_run:
                 compute_timer = timeit.default_timer()
@@ -446,6 +498,13 @@ def compute_indices(
                 if is_threshold_index:
                     compute_kwargs["threshold"] = threshold_value
                     comp_info += f"threshold = {threshold_value}."
+
+                if is_spell_duration_index:
+                    compute_kwargs["spells_can_span_groups"] = spell_span_groups_value
+                    comp_info += (
+                        f"spells_can_span_groups = {spell_span_groups_value}."
+                    )
+
                 try:
                     logger.info(comp_info)
                     index_values = inited_index_class.compute(**compute_kwargs)
