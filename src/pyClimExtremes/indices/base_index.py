@@ -126,6 +126,128 @@ class BaseIndex:
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
 
+    def _get_backend_method(self):
+        """Resolve the backend method configured for this index."""
+        if not self.backend_callable_name:
+            err_msg = (
+                f"backend_callable_name not set for {self.__class__.__name__}"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        try:
+            return getattr(self.compute_backend, self.backend_callable_name)
+        except AttributeError as e:
+            err_msg = (
+                f"Backend '{self.backend_name}' has no method "
+                f"'{self.backend_callable_name}'"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise AttributeError(err_msg) from e
+
+    def _add_backend_data_kwargs(
+        self,
+        kwargs: dict[str, Any],
+        validated_data: np.ndarray | dict[str, np.ndarray],
+    ) -> None:
+        """Add validated input arrays using backend naming convention."""
+        if len(self.required_vars) == 1:
+            var_name = self.required_vars[0]
+            kwargs[f"{var_name}_data"] = validated_data
+            return
+
+        if not isinstance(validated_data, dict):
+            err_msg = (
+                "Validated data should be a dict when multiple "
+                "required variables are specified."
+            )
+            logger.error(err_msg, stack_info=True)
+            raise TypeError(err_msg)
+
+        for var_name, arr in validated_data.items():
+            kwargs[f"{var_name}_data"] = arr
+
+    def _add_optional_backend_kwargs(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        time_array: np.ndarray | None = None,
+        time_units: str | None = None,
+        calendar: str | None = None,
+        lat: np.ndarray | None = None,
+    ) -> None:
+        """Add optional metadata arrays used by some backend methods."""
+        if time_array is not None:
+            kwargs["time_array"] = time_array
+        if time_units is not None:
+            kwargs["time_units"] = time_units
+        if calendar is not None:
+            kwargs["calendar"] = calendar
+        if lat is not None:
+            kwargs["lat"] = lat
+
+    def _filter_backend_kwargs(
+        self,
+        backend_method,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Filter kwargs to parameters explicitly accepted by the backend."""
+        logger.debug("Unfiltered kwargs keys: %s", list(kwargs.keys()))
+
+        unwrapped_method = inspect.unwrap(backend_method)
+        sig = inspect.signature(unwrapped_method)
+
+        logger.debug(
+            "Unwrapped method signature parameters: %s",
+            list(sig.parameters.keys())
+        )
+
+        filtered_kwargs = {
+            key: value for key, value in kwargs.items()
+            if key in sig.parameters
+        }
+
+        logger.debug(
+            "Calling %s with kwargs: %s",
+            self.backend_callable_name, list(filtered_kwargs.keys())
+        )
+
+        return filtered_kwargs
+
+    def _compute_with_kwargs(
+        self,
+        validated_data: np.ndarray | dict[str, np.ndarray],
+        *,
+        compute_fq: str,
+        group_index: np.ndarray,
+        time_array: np.ndarray | None = None,
+        time_units: str | None = None,
+        calendar: str | None = None,
+        lat: np.ndarray | None = None,
+        extra_kwargs: dict[str, Any] | None = None,
+    ):
+        """Run the configured backend method with shared argument handling."""
+        backend_method = self._get_backend_method()
+
+        kwargs = {
+            "compute_fq": compute_fq,
+            "group_index": group_index,
+        }
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+
+        self._add_backend_data_kwargs(kwargs, validated_data)
+        self._add_optional_backend_kwargs(
+            kwargs,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+        )
+
+        filtered_kwargs = self._filter_backend_kwargs(backend_method, kwargs)
+        return backend_method(**filtered_kwargs)
+
     def compute(
         self,
         compute_fq:         str,
@@ -168,91 +290,90 @@ class BaseIndex:
         AttributeError
             If the backend does not have the required method.
         """
-        # Validate and extract data
+        validated_data = validate_data_array(data_array, self.required_vars)
+        return self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+            extra_kwargs={"fixed_threshold": fixed_threshold},
+        )
+
+class SpellDurationIndex(BaseIndex):
+    """Index subclass for spell duration indices.
+
+    Extends BaseIndex to support indices that count spell durations
+    (e.g., WSDI, CSDI, CDD). Subclasses should set `spells_can_span_groups`
+    as a class attribute to indicate whether to allow spells to span group
+    boundaries (e.g., years).
+
+    Examples
+    --------
+    class WSDI(SpellDurationIndex):
+        index_id = "wsdiETCCDI"
+        spells_can_span_groups = False
+        backend_callable_name = "wsdi"
+    """
+
+    spells_can_span_groups: bool = True
+
+
+    def compute(
+        self,
+        compute_fq:         str,
+        data_array:         np.ndarray | dict[str, np.ndarray],
+        group_index:        np.ndarray,
+        time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
+        fixed_threshold:    dict[str, float] | None = None,
+        spells_can_span_groups: bool | None = None,
+    ):
+        """Compute a threshold-based index with optional custom threshold.
+
+        Parameters
+        ----------
+        compute_fq : str
+            The computation frequency (e.g., 'mon', 'yr').
+        data_array : np.ndarray | dict[str, np.ndarray]
+            Input data array(s).
+        group_index : np.ndarray
+            Time grouping indices for aggregation.
+        time_array : np.ndarray | None, optional
+            Time array, passed to backend if needed.
+        fixed_threshold : dict[str, float] | None, optional
+            Fixed threshold values for indices that require them.
+        spells_can_span_groups : bool | None, optional
+            Whether to allow spells to span group boundaries (e.g., years).
+            If not provided, the class attribute value is used.
+
+        Returns
+        -------
+        np.ndarray
+            Computed index values at the requested frequency.
+        """
+
         validated_data = validate_data_array(data_array, self.required_vars)
 
-        # Get the backend method dynamically
-        if not self.backend_callable_name:
-            err_msg = (
-                f"backend_callable_name not set for {self.__class__.__name__}"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        try:
-            backend_method = getattr(self.compute_backend, self.backend_callable_name)
-        except AttributeError as e:
-            err_msg = (
-                f"Backend '{self.backend_name}' has no method "
-                f"'{self.backend_callable_name}'"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise AttributeError(err_msg) from e
-
-        # Build kwargs for the backend method
-        kwargs = {
-            "compute_fq": compute_fq,
-            "group_index": group_index,
-            "fixed_threshold": fixed_threshold
-        }
-
-        # Add data with backend-friendly variable names ({var}_data)
-        if len(self.required_vars) == 1:
-            # Single variable: pass as {var}_data
-            var_name = self.required_vars[0]
-            backend_var_name = f"{var_name}_data"
-            kwargs[backend_var_name] = validated_data
-        else:
-            # Multiple variables: pass each as {var}
-            # double check that validated_data is a dict
-            if not isinstance(validated_data, dict):
-                err_msg = (
-                    "Validated data should be a dict when multiple "
-                    "required variables are specified."
-                )
-                logger.error(err_msg, stack_info=True)
-                raise TypeError(err_msg)
-            for var_name, arr in validated_data.items():
-                backend_var_name = f"{var_name}_data"
-                kwargs[backend_var_name] = arr
-
-        # Add optional arrays if provided
-        if time_array is not None:
-            kwargs["time_array"] = time_array
-        if time_units is not None:
-            kwargs["time_units"] = time_units
-        if calendar is not None:
-            kwargs["calendar"] = calendar
-        if lat is not None:
-            kwargs["lat"] = lat
-
-        # check if filtering is needed for this kwarg-index pair
-        # Log unfiltered kwargs
-        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
-
-        # Filter kwargs to only include parameters the backend method accepts
-        # since the python backend wraps methods, we need to unwrap it first
-        unwrapped_method = inspect.unwrap(backend_method)
-        sig = inspect.signature(unwrapped_method)
-
-        logger.debug(
-            "Unwrapped method signature parameters: %s",
-            list(sig.parameters.keys())
+        if spells_can_span_groups is None:
+            spells_can_span_groups = self.spells_can_span_groups
+        return self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+            extra_kwargs={
+                "fixed_threshold": fixed_threshold,
+                "spells_can_span_groups": spells_can_span_groups,
+            },
         )
-
-        # Filter to explicit parameters - only include if explicitly in sign
-        filtered_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in sig.parameters
-        }
-
-        # Log what we're passing
-        logger.debug(
-            "Calling %s with kwargs: %s",
-            self.backend_callable_name, list(filtered_kwargs.keys())
-        )
-
-        return backend_method(**filtered_kwargs)
 
 
 class ThresholdIndex(BaseIndex):
@@ -307,88 +428,20 @@ class ThresholdIndex(BaseIndex):
             Computed index values at the requested frequency.
         """
 
-        # Validate and extract data
         validated_data = validate_data_array(data_array, self.required_vars)
-
-        # Get the backend method dynamically
-        if not self.backend_callable_name:
-            err_msg = (
-                f"backend_callable_name not set for {self.__class__.__name__}"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        try:
-            backend_method = getattr(self.compute_backend, self.backend_callable_name)
-        except AttributeError as e:
-            err_msg = (
-                f"Backend '{self.backend_name}' has no method "
-                f"'{self.backend_callable_name}'"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise AttributeError(err_msg) from e
-
-        # Build kwargs for the backend method
-        kwargs = {"compute_fq": compute_fq, "group_index": group_index}
-
-        # Add data with backend-friendly variable names ({var}_data)
-        if len(self.required_vars) == 1:
-            # Single variable: pass as {var}_data
-            var_name = self.required_vars[0]
-            backend_var_name = f"{var_name}_data"
-            kwargs[backend_var_name] = validated_data
-        else:
-            # Multiple variables: pass each as {var}_data
-            if not isinstance(validated_data, dict):
-                err_msg = (
-                    "Validated data should be a dict when multiple "
-                    "required variables are specified."
-                )
-                logger.error(err_msg, stack_info=True)
-                raise TypeError(err_msg)
-            for var_name, arr in validated_data.items():
-                backend_var_name = f"{var_name}_data"
-                kwargs[backend_var_name] = arr
-
-        # Add optional arrays if provided
-        if time_array is not None:
-            kwargs["time_array"] = time_array
-        if time_units is not None:
-            kwargs["time_units"] = time_units
-        if calendar is not None:
-            kwargs["calendar"] = calendar
-        if lat is not None:
-            kwargs["lat"] = lat
-        if threshold is not None:
-            kwargs["threshold"] = threshold
-        if threshold_array is not None:
-            kwargs["threshold_array"] = threshold_array
-
-        # Log unfiltered kwargs
-        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
-
-        # Filter kwargs to only include parameters the backend method accepts
-        unwrapped_method = inspect.unwrap(backend_method)
-        sig = inspect.signature(unwrapped_method)
-
-        logger.debug(
-            "Unwrapped method signature parameters: %s",
-            list(sig.parameters.keys())
+        return self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+            extra_kwargs={
+                "threshold": threshold,
+                "threshold_array": threshold_array,
+            },
         )
-
-        # Filter to explicit parameters
-        filtered_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in sig.parameters
-        }
-
-        # Log what we're passing
-        logger.debug(
-            "Calling %s with kwargs: %s",
-            self.backend_callable_name, list(filtered_kwargs.keys())
-        )
-
-        return backend_method(**filtered_kwargs)
 
 class QuantileIndex(BaseIndex):
     """Index subclass for quantile-based indices.
@@ -467,98 +520,38 @@ class QuantileIndex(BaseIndex):
             Computed index values (yearly exceedance frequencies for temperature,
             scalar quantile for precipitation).
         """
-        # Validate and extract data
         validated_data = validate_data_array(data_array, self.required_vars)
-
-        # Get the backend method dynamically
-        if not self.backend_callable_name:
-            err_msg = (
-                f"backend_callable_name not set for {self.__class__.__name__}"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        try:
-            backend_method = getattr(self.compute_backend, self.backend_callable_name)
-        except AttributeError as e:
-            err_msg = (
-                f"Backend '{self.backend_name}' has no method "
-                f"'{self.backend_callable_name}'"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise AttributeError(err_msg) from e
-
-        # Build kwargs for the backend method
-        kwargs = {
-            "compute_fq": compute_fq,
-            "group_index": group_index,
+        extra_kwargs: dict[str, Any] = {
             "quantile": self.quantile,
         }
+        quantile_time_array = None
+        quantile_time_units = None
+        quantile_calendar = None
 
-        # Add data with backend-friendly variable names ({var}_data)
-        if len(self.required_vars) == 1:
-            var_name = self.required_vars[0]
-            backend_var_name = f"{var_name}_data"
-            kwargs[backend_var_name] = validated_data
-        else:
-            if not isinstance(validated_data, dict):
-                err_msg = (
-                    "Validated data should be a dict when multiple "
-                    "required variables are specified."
-                )
-                logger.error(err_msg, stack_info=True)
-                raise TypeError(err_msg)
-            for var_name, arr in validated_data.items():
-                backend_var_name = f"{var_name}_data"
-                kwargs[backend_var_name] = arr
-
-        # Add optional parameters for temperature quantiles
         if self.index_type == "temperature":
             if base_period_mask is None:
                 err_msg = "base_period_mask is required for temperature quantile indices"
                 logger.error(err_msg, stack_info=True)
                 raise ValueError(err_msg)
-            kwargs["base_period_mask"] = base_period_mask
-            kwargs["window_size"] = window_size
-            kwargs["bootstrap_samples"] = bootstrap_samples
+            extra_kwargs["base_period_mask"] = base_period_mask
+            extra_kwargs["window_size"] = window_size
+            extra_kwargs["bootstrap_samples"] = bootstrap_samples
             if random_seed is not None:
-                kwargs["random_seed"] = random_seed
-            if time_array is not None:
-                kwargs["time_array"] = time_array
-            if time_units is not None:
-                kwargs["time_units"] = time_units
-            if calendar is not None:
-                kwargs["calendar"] = calendar
+                extra_kwargs["random_seed"] = random_seed
+            quantile_time_array = time_array
+            quantile_time_units = time_units
+            quantile_calendar = calendar
 
-        # Add optional arrays if provided
-        if lat is not None:
-            kwargs["lat"] = lat
-
-        # Log unfiltered kwargs
-        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
-
-        # Filter kwargs to only include parameters the backend method accepts
-        unwrapped_method = inspect.unwrap(backend_method)
-        sig = inspect.signature(unwrapped_method)
-
-        logger.debug(
-            "Unwrapped method signature parameters: %s",
-            list(sig.parameters.keys())
+        result = self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=quantile_time_array,
+            time_units=quantile_time_units,
+            calendar=quantile_calendar,
+            lat=lat,
+            extra_kwargs=extra_kwargs,
         )
-
-        # Filter to explicit parameters
-        filtered_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in sig.parameters
-        }
-
-        # Log what we're passing
-        logger.debug(
-            "Calling %s with kwargs: %s",
-            self.backend_callable_name, list(filtered_kwargs.keys())
-        )
-
-        result = backend_method(**filtered_kwargs)
 
         # For temperature quantiles, backend may return dict with 'result' and 'thresholds'
         if isinstance(result, dict):
@@ -635,82 +628,14 @@ class QuantileThresholdIndex(BaseIndex):
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
 
-        # Validate and extract data
         validated_data = validate_data_array(data_array, self.required_vars)
-
-        # Get the backend method dynamically
-        if not self.backend_callable_name:
-            err_msg = (
-                f"backend_callable_name not set for {self.__class__.__name__}"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        try:
-            backend_method = getattr(self.compute_backend, self.backend_callable_name)
-        except AttributeError as e:
-            err_msg = (
-                f"Backend '{self.backend_name}' has no method "
-                f"'{self.backend_callable_name}'"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise AttributeError(err_msg) from e
-
-        # Build kwargs for the backend method
-        kwargs = {"compute_fq": compute_fq, "group_index": group_index}
-
-        # Add data with backend-friendly variable names ({var}_data)
-        if len(self.required_vars) == 1:
-            var_name = self.required_vars[0]
-            backend_var_name = f"{var_name}_data"
-            kwargs[backend_var_name] = validated_data
-        else:
-            if not isinstance(validated_data, dict):
-                err_msg = (
-                    "Validated data should be a dict when multiple "
-                    "required variables are specified."
-                )
-                logger.error(err_msg, stack_info=True)
-                raise TypeError(err_msg)
-            for var_name, arr in validated_data.items():
-                backend_var_name = f"{var_name}_data"
-                kwargs[backend_var_name] = arr
-
-        # Pass threshold array
-        kwargs["threshold_array"] = thresholds_array
-
-        # Add optional arrays if provided
-        if time_array is not None:
-            kwargs["time_array"] = time_array
-        if time_units is not None:
-            kwargs["time_units"] = time_units
-        if calendar is not None:
-            kwargs["calendar"] = calendar
-        if lat is not None:
-            kwargs["lat"] = lat
-
-        # Log unfiltered kwargs
-        logger.debug(f"Unfiltered kwargs keys: {list(kwargs.keys())}")
-
-        # Filter kwargs to only include parameters the backend method accepts
-        unwrapped_method = inspect.unwrap(backend_method)
-        sig = inspect.signature(unwrapped_method)
-
-        logger.debug(
-            "Unwrapped method signature parameters: %s",
-            list(sig.parameters.keys())
+        return self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+            extra_kwargs={"threshold_array": thresholds_array},
         )
-
-        # Filter to explicit parameters
-        filtered_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in sig.parameters
-        }
-
-        # Log what we're passing
-        logger.debug(
-            "Calling %s with kwargs: %s",
-            self.backend_callable_name, list(filtered_kwargs.keys())
-        )
-
-        return backend_method(**filtered_kwargs)
