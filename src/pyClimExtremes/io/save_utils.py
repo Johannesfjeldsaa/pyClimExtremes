@@ -20,7 +20,7 @@ from typing import Any, Union
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from general_backend.logging.setup_logging import get_logger
+from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 
