@@ -26,6 +26,8 @@ dev = [
   "flake8",
   "isort",
   "mypy",
+  "ipykernel",
+  "cartopy",
 ]
 
 [tool.setuptools.packages.find]
