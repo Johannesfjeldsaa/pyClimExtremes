@@ -609,10 +609,393 @@ class PythonBackend:
         logger.debug(f"Computed GSL with shape {out.shape}")
         return out
 
+    def _build_day_of_year_sample(
+        self,
+        calendar_day: int,
+        data: np.ndarray,
+        time_array: np.ndarray,
+        time_units: str,
+        calendar: str,
+        base_years: np.ndarray | None = None,
+        exclude_year: int | None = None,
+    ) -> np.ndarray:
+        """Extract all values for a given calendar day across specified years.
 
-    # ---
-    # precipitation
-    # ---
+        Parameters
+        ----------
+        calendar_day : int
+            Day of year (0-364 or 0-365)
+        data : np.ndarray
+            Shape (time, lat, lon) — daily data
+        time_array : np.ndarray
+            Time coordinate values
+        time_units : str
+            Time units string
+        calendar : str
+            Calendar type
+        base_years : np.ndarray | None
+            Array of year values to include; if None, use all years
+        exclude_year : int | None
+            Year to exclude (for leave-one-out bootstrap)
+
+        Returns
+        -------
+        np.ndarray
+            Stacked values from all qualifying years for the calendar day
+        """
+        dates = num2date(time_array, units=time_units, calendar=calendar)
+        years = np.fromiter((d.year for d in dates), dtype=int, count=len(dates))
+        day_of_years = np.fromiter((d.timetuple().tm_yday - 1 for d in dates), dtype=int, count=len(dates))
+
+        # Identify indices matching both calendar day and allowed year range
+        day_match = day_of_years == calendar_day
+        if base_years is not None:
+            year_match = np.isin(years, base_years)
+        else:
+            year_match = np.ones_like(years, dtype=bool)
+
+        if exclude_year is not None:
+            year_match = year_match & (years != exclude_year)
+
+        idx = np.where(day_match & year_match)[0]
+
+        if idx.size == 0:
+            return np.array([])
+
+        return data[idx]
+
+    def _compute_percentile_from_window(
+        self,
+        calendar_day: int,
+        data: np.ndarray,
+        time_array: np.ndarray,
+        time_units: str,
+        calendar: str,
+        quantile: float,
+        window_size: int = 5,
+        base_years: np.ndarray | None = None,
+        exclude_year: int | None = None,
+    ) -> np.ndarray:
+        """Compute percentile threshold for a calendar day using rolling window.
+
+        For a given calendar day, extracts samples from a rolling window of days
+        (e.g., day ± 2 for window_size=5 centered) across all available years,
+        then computes the empirical quantile.
+
+        Parameters
+        ----------
+        calendar_day : int
+            Center day of year (0-364 or 0-365)
+        data : np.ndarray
+            Shape (time, lat, lon) — daily data
+        time_array : np.ndarray
+            Time coordinate values
+        time_units : str
+            Time units string
+        calendar : str
+            Calendar type
+        quantile : float
+            Quantile to compute (0 to 1)
+        window_size : int
+            Size of rolling window (default 5)
+        base_years : np.ndarray | None
+            Years to include
+        exclude_year : int | None
+            Year to exclude (for leave-one-out)
+
+        Returns
+        -------
+        np.ndarray
+            Shape (lat, lon) — quantile threshold per grid point
+        """
+        n_doy = 366  # Max days in year
+        half_window = window_size // 2
+
+        # Collect data from window of days
+        dates = num2date(time_array, units=time_units, calendar=calendar)
+        years = np.fromiter((d.year for d in dates), dtype=int, count=len(dates))
+        day_of_years = np.fromiter((d.timetuple().tm_yday - 1 for d in dates), dtype=int, count=len(dates))
+
+        # Build window [center - half_window, ..., center + half_window]
+        window_days = set()
+        for offset in range(-half_window, half_window + 1):
+            window_day = (calendar_day + offset) % n_doy
+            window_days.add(window_day)
+
+        day_match = np.isin(day_of_years, list(window_days))
+        if base_years is not None:
+            year_match = np.isin(years, base_years)
+        else:
+            year_match = np.ones_like(years, dtype=bool)
+
+        if exclude_year is not None:
+            year_match = year_match & (years != exclude_year)
+
+        idx = np.where(day_match & year_match)[0]
+
+        if idx.size == 0:
+            # No data in window; return NaN
+            return np.full(data.shape[1:], np.nan, dtype=data.dtype)
+
+        window_data = data[idx]  # Shape (n_samples, lat, lon)
+
+        # Compute quantile per grid point
+        return np.quantile(window_data, quantile, axis=0, method='linear')
+
+    def _temperature_quantiles_estimation(
+        self,
+        temp_data: np.ndarray,
+        base_period_mask: np.ndarray,
+        time_array: np.ndarray,
+        time_units: str,
+        calendar: str,
+        quantile: float,
+        window_size: int = 5,
+        bootstrap_samples: int = 1000,
+        random_seed: int | None = None,
+    ) -> dict:
+        """Estimate daily quantile thresholds and compute yearly exceedance frequencies.
+
+        Parameters
+        ----------
+        temp_data : np.ndarray
+            Shape (time, lat, lon) — daily temperature data
+        base_period_mask : np.ndarray
+            Shape (num_years,) — boolean mask of base-period years
+        time_array : np.ndarray
+            Time coordinate
+        time_units : str
+            Time units string
+        calendar : str
+            Calendar type
+        quantile : float
+            Quantile to compute (0.1 for 10th percentile, etc.)
+        window_size : int
+            Rolling window size for threshold estimation
+        bootstrap_samples : int
+            Number of bootstrap resamples for base-period years
+        random_seed : int | None
+            Random seed for reproducibility
+
+        Returns
+        -------
+        dict
+            {'result': yearly_exceedances (shape: num_years × lat × lon),
+             'thresholds': daily_thresholds (shape: 366 × lat × lon)}
+        """
+        if random_seed is not None:
+            np.random.seed(random_seed)
+
+        dates = num2date(time_array, units=time_units, calendar=calendar)
+        years = np.asarray([d.year for d in dates], dtype=int)
+        day_of_years = np.asarray([d.timetuple().tm_yday - 1 for d in dates], dtype=int)
+
+        unique_years = np.unique(years)
+        n_years = len(unique_years)
+        year_to_idx = {int(y): i for i, y in enumerate(unique_years)}
+
+        # Validate base_period_mask
+        if base_period_mask.size != n_years:
+            err_msg = (
+                f"base_period_mask size ({base_period_mask.size}) does not match "
+                f"number of years in data ({n_years})"
+            )
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        base_years = unique_years[base_period_mask.astype(bool)]
+
+        # --- Step 1: Compute daily thresholds from base period ---
+        n_doy = 366  # Handle leap years
+        thresholds_by_doy = np.full((n_doy,) + temp_data.shape[1:], np.nan, dtype=temp_data.dtype)
+
+        for doy in range(n_doy):
+            thresholds_by_doy[doy] = self._compute_percentile_from_window(
+                doy, temp_data, time_array, time_units, calendar,
+                quantile, window_size, base_years, exclude_year=None
+            )
+
+        # --- Step 2: Compute yearly exceedance frequencies ---
+        exceedance_rates = np.full((n_years,) + temp_data.shape[1:], np.nan, dtype=np.float32)
+
+        for i, year in enumerate(unique_years):
+            year_idx = np.where(years == year)[0]
+            year_doys = day_of_years[year_idx]
+            year_data = temp_data[year_idx]
+
+            is_base_year = base_period_mask[i]
+
+            if not is_base_year:
+                # For years outside base period: use fixed thresholds
+                exceed_count = 0
+                valid_count = 0
+
+                for t, doy in enumerate(year_doys):
+                    doy_threshold = thresholds_by_doy[doy]
+                    temp_val = year_data[t]
+
+                    valid_mask = ~np.isnan(temp_val) & ~np.isnan(doy_threshold)
+                    valid_count += np.sum(valid_mask)
+
+                    # For lower-tail quantiles (e.g., 10th percentile), use <
+                    # For upper-tail quantiles (e.g., 90th percentile), use >
+                    if quantile <= 0.5:
+                        exceed_mask = temp_val < doy_threshold
+                    else:
+                        exceed_mask = temp_val > doy_threshold
+
+                    exceed_count += np.sum(exceed_mask & valid_mask)
+
+                exceedance_rates[i] = np.where(
+                    valid_count > 0,
+                    exceed_count / valid_count,
+                    np.nan
+                )
+            else:
+                # For years in base period: bootstrap resampling
+                boot_rates = []
+
+                for b in range(bootstrap_samples):
+                    # Build leave-one-year-out sample and bootstrap-resample
+                    exceed_count_b = 0
+                    valid_count_b = 0
+
+                    for t, doy in enumerate(year_doys):
+                        # Compute threshold from bootstrap sample of leave-one-year-out base
+                        boot_threshold = self._compute_percentile_from_window(
+                            doy, temp_data, time_array, time_units, calendar,
+                            quantile, window_size, base_years, exclude_year=int(year)
+                        )
+
+                        # Don't bootstrap resample if computing from full base - just apply threshold
+                        # This implements the leave-one-year-out thresholds directly
+                        temp_val = year_data[t]
+
+                        valid_mask = ~np.isnan(temp_val) & ~np.isnan(boot_threshold)
+                        valid_count_b += np.sum(valid_mask)
+
+                        if quantile <= 0.5:
+                            exceed_mask = temp_val < boot_threshold
+                        else:
+                            exceed_mask = temp_val > boot_threshold
+
+                        exceed_count_b += np.sum(exceed_mask & valid_mask)
+
+                    boot_rate = np.where(
+                        valid_count_b > 0,
+                        exceed_count_b / valid_count_b,
+                        np.nan
+                    )
+                    boot_rates.append(boot_rate)
+
+                # Average across bootstrap repetitions
+                boot_rates_arr = np.asarray(boot_rates)
+                exceedance_rates[i] = np.nanmean(boot_rates_arr, axis=0)
+
+        return {
+            'result': exceedance_rates,
+            'thresholds': thresholds_by_doy
+        }
+
+    @check_supported_compute_frequencies
+    def tx90p(
+        self,
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        base_period_mask:   np.ndarray,
+        time_array:         np.ndarray,
+        time_units:         str,
+        calendar:           str,
+        window_size:        int = 5,
+        bootstrap_samples:  int = 1000,
+        random_seed:        int | None = None,
+    ) -> dict:
+        """90th percentile of daily maximum temperature (TX90p).
+
+        Returns yearly count of days when TX > 90th percentile threshold.
+        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        """
+        return self._temperature_quantiles_estimation(
+            tasmax_data, base_period_mask, time_array, time_units, calendar,
+            quantile, window_size, bootstrap_samples, random_seed
+        )
+
+    @check_supported_compute_frequencies
+    def tn90p(
+        self,
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        base_period_mask:   np.ndarray,
+        time_array:         np.ndarray,
+        time_units:         str,
+        calendar:           str,
+        window_size:        int = 5,
+        bootstrap_samples:  int = 1000,
+        random_seed:        int | None = None,
+    ) -> dict:
+        """90th percentile of daily minimum temperature (TN90p).
+
+        Returns yearly count of days when TN > 90th percentile threshold.
+        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        """
+        return self._temperature_quantiles_estimation(
+            tasmin_data, base_period_mask, time_array, time_units, calendar,
+            quantile, window_size, bootstrap_samples, random_seed
+        )
+
+    @check_supported_compute_frequencies
+    def tx10p(
+        self,
+        compute_fq:         str,
+        tasmax_data:        np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        base_period_mask:   np.ndarray,
+        time_array:         np.ndarray,
+        time_units:         str,
+        calendar:           str,
+        window_size:        int = 5,
+        bootstrap_samples:  int = 1000,
+        random_seed:        int | None = None,
+    ) -> dict:
+        """10th percentile of daily maximum temperature (TX10p).
+
+        Returns yearly count of days when TX < 10th percentile threshold.
+        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        """
+        return self._temperature_quantiles_estimation(
+            tasmax_data, base_period_mask, time_array, time_units, calendar,
+            quantile, window_size, bootstrap_samples, random_seed
+        )
+
+    @check_supported_compute_frequencies
+    def tn10p(
+        self,
+        compute_fq:         str,
+        tasmin_data:        np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        base_period_mask:   np.ndarray,
+        time_array:         np.ndarray,
+        time_units:         str,
+        calendar:           str,
+        window_size:        int = 5,
+        bootstrap_samples:  int = 1000,
+        random_seed:        int | None = None,
+    ) -> dict:
+        """10th percentile of daily minimum temperature (TN10p).
+
+        Returns yearly count of days when TN < 10th percentile threshold.
+        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        """
+        return self._temperature_quantiles_estimation(
+            tasmin_data, base_period_mask, time_array, time_units, calendar,
+            quantile, window_size, bootstrap_samples, random_seed
+        )
 
 
     @check_supported_compute_frequencies
@@ -929,3 +1312,167 @@ class PythonBackend:
         logger.debug(f"Computed PRCPTOT with shape {prcptot.shape}")
 
         return prcptot
+
+
+    def _compute_precipitation_quantile_threshold(
+        self,
+        pr_data: np.ndarray,
+        quantile: float,
+        base_period_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Compute global perceptile threshold for precipitation data.
+
+        Parameters
+        ----------
+        pr_data : np.ndarray
+            Shape (time, lat, lon) — daily precipitation
+        quantile : float
+            Quantile level (0 to 1)
+        base_period_mask : np.ndarray
+            Shape (num_years,) — boolean mask of base-period years to
+            include in threshold calculation
+
+        Returns
+        -------
+        np.ndarray
+            Threshold value per grid point
+        """
+        valid_data = pr_data[~np.isnan(pr_data)]
+        valid_data = valid_data[base_period_mask]
+
+        if valid_data.size == 0:
+            return np.full(pr_data.shape[1:], np.nan, dtype=pr_data.dtype)
+
+        percentile_value = np.percentile(valid_data, quantile * 100)
+        return np.full(pr_data.shape[1:], percentile_value, dtype=pr_data.dtype)
+
+    @check_supported_compute_frequencies
+    def r95p(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        threshold_array:    np.ndarray | None = None,
+    ):
+        """Sum of precipitation on very wet days (R95p).
+
+        Total precipitation on days with daily precipitation > 95th percentile.
+
+        Parameters
+        ----------
+        threshold_array : np.ndarray | None, optional
+            Pre-computed threshold (e.g., from QuantileThresholdIndex).
+            If None, computed from quantile.
+        """
+        # Use provided threshold or compute from quantile
+        if threshold_array is None:
+            threshold = self._compute_precipitation_quantile_threshold(pr_data, quantile, base_period_mask)
+        else:
+            threshold = threshold_array
+
+        # Identify days exceeding threshold
+        exceed_mask = pr_data > threshold[np.newaxis, ...]
+
+        # Sum precipitation on wet days
+        r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed R95p with shape {r95p.shape}")
+        return r95p
+
+    @check_supported_compute_frequencies
+    def r99p(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        quantile:           float,
+        threshold_array:    np.ndarray | None = None,
+    ):
+        """Sum of precipitation on extremely wet days (R99p).
+
+        Total precipitation on days with daily precipitation > 99th percentile.
+
+        Parameters
+        ----------
+        threshold_array : np.ndarray | None, optional
+            Pre-computed threshold (e.g., from QuantileThresholdIndex).
+            If None, computed from quantile.
+        """
+        # Use provided threshold or compute from quantile
+        if threshold_array is None:
+            threshold = self._compute_precipitation_quantile_threshold(pr_data, quantile)
+        else:
+            threshold = threshold_array
+
+        # Identify days exceeding threshold
+        exceed_mask = pr_data > threshold[np.newaxis, ...]
+
+        # Sum precipitation on wet days
+        r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed R99p with shape {r99p.shape}")
+        return r99p
+
+    @check_supported_compute_frequencies
+    def r95p_tot(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        threshold_array:    np.ndarray,
+    ):
+        """Percentage contribution of very wet days to total precipitation (R95pTOT).
+
+        Contribution: 100 × (R95p / PRCPTOT)
+
+        Parameters
+        ----------
+        threshold_array : np.ndarray
+            Pre-computed 95th percentile threshold from QuantileThresholdIndex.
+        """
+        # Compute R95p (sum on wet days)
+        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
+
+        # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
+        wet_mask = pr_data >= 1.0  # 1 mm threshold
+        prcptot = self._aggregate_by_group(pr_data * wet_mask, group_index, np.sum)
+
+        # Avoid division by zero
+        r95p_tot = np.where(prcptot > 0, 100.0 * r95p / prcptot, np.nan)
+
+        logger.debug(f"Computed R95pTOT with shape {r95p_tot.shape}")
+        return r95p_tot
+
+    @check_supported_compute_frequencies
+    def r99p_tot(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        threshold_array:    np.ndarray,
+    ):
+        """Percentage contribution of extremely wet days to total precipitation (R99pTOT).
+
+        Contribution: 100 × (R99p / PRCPTOT)
+
+        Parameters
+        ----------
+        threshold_array : np.ndarray
+            Pre-computed 99th percentile threshold from QuantileThresholdIndex.
+        """
+        # Compute R99p (sum on wet days)
+        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
+
+        # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
+        wet_mask = pr_data >= 1.0  # 1 mm threshold
+        prcptot = self._aggregate_by_group(pr_data * wet_mask, group_index, np.sum)
+
+        # Avoid division by zero
+        r99p_tot = np.where(prcptot > 0, 100.0 * r99p / prcptot, np.nan)
+
+        logger.debug(f"Computed R99pTOT with shape {r99p_tot.shape}")
+        return r99p_tot
+
