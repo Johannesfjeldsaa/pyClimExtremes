@@ -12,7 +12,7 @@ information).
 
 Author: Johannes Fjeldså
 """
-
+import os
 import traceback
 from pathlib import Path
 from typing import Any, Union
@@ -20,7 +20,7 @@ from typing import Any, Union
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from pyClimExtremes.logging.setup_logging import get_logger
+from general_backend.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -112,6 +112,9 @@ def check_filepath(
             positive_msg=positive_msg,
             negative_msg=negative_msg,
         )
+        if write:
+            logger.debug(f"Overwriting existing file: {file_path}")
+            os.remove(file_path)
     if write and not file_path.parent.exists():
         file_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(
