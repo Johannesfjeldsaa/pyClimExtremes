@@ -2,7 +2,9 @@
 import numpy as np
 
 from pyClimExtremes.indices.registry import register_index
-from pyClimExtremes.indices.base_index import BaseIndex, ThresholdIndex
+from pyClimExtremes.indices.base_index import (
+    BaseIndex, ThresholdIndex, QuantileThresholdIndex
+)
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
@@ -230,3 +232,78 @@ class DTRIndex(BaseIndex):
     frequencies = ["mon", "yr"]
     backend_callable_name = 'dtr'
 
+class TN10pIndex(QuantileThresholdIndex):
+    """Number of days when daily minimum temperature < 10th percentile
+    of daily minimum temperature during the baseline period"""
+
+    index_type = "temperature"
+    index_id = "tn10p"
+    index_aliases = ["tn10p", "TN10P", "tn10pETCCDI"]
+    index_long_name = "Number of days when daily minimum temperature < 10th percentile of daily minimum temperature (degC) during the baseline period"
+    index_units = "days"
+    unit_after_aggregation = {
+        'deg_C': "days",
+        'K': "days"
+    }
+    required_vars = ["tasmin"]
+    frequencies = ["yr"]
+    backend_callable_name = "tn10p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "tn_q10p"
+
+class TN90pIndex(QuantileThresholdIndex):
+    """Number of days when daily minimum temperature > 90th percentile
+    of daily minimum temperature during the baseline period"""
+
+    index_type = "temperature"
+    index_id = "tn90p"
+    index_aliases = ["tn90p", "TN90P", "tn90pETCCDI"]
+    index_long_name = "Number of days when daily minimum temperature > 90th percentile of daily minimum temperature (degC) during the baseline period"
+    index_units = "days"
+    unit_after_aggregation = {
+        'deg_C': "days",
+        'K': "days"
+    }
+    required_vars = ["tasmin"]
+    frequencies = ["yr"]
+    backend_callable_name = "tn90p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "tn_q90p"
+
+class TX10pIndex(QuantileThresholdIndex):
+    """Number of days when daily maximum temperature < 10th percentile
+    of daily maximum temperature during the baseline period"""
+
+    index_type = "temperature"
+    index_id = "tx10p"
+    index_aliases = ["tx10p", "TX10P", "tx10pETCCDI"]
+    index_long_name = "Number of days when daily maximum temperature < 10th percentile of daily maximum temperature (degC) during the baseline period"
+    index_units = "days"
+    unit_after_aggregation = {
+        'deg_C': "days",
+        'K': "days"
+    }
+    required_vars = ["tasmax"]
+    frequencies = ["yr"]
+    backend_callable_name = "tx10p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "tx_q10p"
+
+class TX90pIndex(QuantileThresholdIndex):
+    """Number of days when daily maximum temperature > 90th percentile
+    of daily maximum temperature during the baseline period"""
+
+    index_type = "temperature"
+    index_id = "tx90p"
+    index_aliases = ["tx90p", "TX90P", "tx90pETCCDI"]
+    index_long_name = "Number of days when daily maximum temperature > 90th percentile of daily maximum temperature (degC) during the baseline period"
+    index_units = "days"
+    unit_after_aggregation = {
+        'deg_C': "days",
+        'K': "days"
+    }
+    required_vars = ["tasmax"]
+    frequencies = ["yr"]
+    backend_callable_name = "tx90p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "tx_q90p"

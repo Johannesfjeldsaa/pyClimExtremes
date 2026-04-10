@@ -399,14 +399,14 @@ class PythonBackend:
     @check_supported_compute_frequencies
     def gsl(
         self,
-        compute_fq: str,
-        tas_data: np.ndarray,
-        group_index: np.ndarray,
-        fixed_threshold: float,
-        time_array: np.ndarray = None,
-        time_units: str = None,
-        calendar: str = None,
-        lat: np.ndarray = None,
+        compute_fq:         str,
+        tas_data:           np.ndarray,
+        group_index:        np.ndarray,
+        fixed_threshold:    float,
+        time_array:         np.ndarray | None = None,
+        time_units:         str | None = None,
+        calendar:           str | None = None,
+        lat:                np.ndarray | None = None,
     ):
         if compute_fq != "yr":
             err_msg = f"GSL only supports annual frequency 'yr', got '{compute_fq}'"
@@ -470,29 +470,23 @@ class PythonBackend:
         return out
 
     @check_supported_compute_frequencies
-    def tx90p(
+    def tn10p(
         self,
         compute_fq:         str,
-        tasmax_data:        np.ndarray,
+        tasmin_data:        np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        base_period_mask:   np.ndarray,
-        time_array:         np.ndarray,
-        time_units:         str,
-        calendar:           str,
-        window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
-        random_seed:        int | None = None,
-    ) -> dict:
-        """90th percentile of daily maximum temperature (TX90p).
-
-        Returns yearly count of days when TX > 90th percentile threshold.
-        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        threshold_array:    np.ndarray,
+    ):
+        """Number of days when daily minimum temperature < 10th percentile (TN10p).
         """
-        return self._temperature_quantiles_estimation(
-            tasmax_data, base_period_mask, time_array, time_units, calendar,
-            quantile, window_size, bootstrap_samples, random_seed
-        )
+        # Identify days below threshold
+        exceed_mask = tasmin_data < threshold_array[np.newaxis, ...]
+
+        # Sum days below threshold
+        tn10p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed TN10p with shape {tn10p.shape}")
+        return tn10p
 
     @check_supported_compute_frequencies
     def tn90p(
@@ -500,24 +494,18 @@ class PythonBackend:
         compute_fq:         str,
         tasmin_data:        np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        base_period_mask:   np.ndarray,
-        time_array:         np.ndarray,
-        time_units:         str,
-        calendar:           str,
-        window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
-        random_seed:        int | None = None,
-    ) -> dict:
-        """90th percentile of daily minimum temperature (TN90p).
-
-        Returns yearly count of days when TN > 90th percentile threshold.
-        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        threshold_array:    np.ndarray,
+    ):
+        """Number of days when daily minimum temperature > 90th percentile (TN90p).
         """
-        return self._temperature_quantiles_estimation(
-            tasmin_data, base_period_mask, time_array, time_units, calendar,
-            quantile, window_size, bootstrap_samples, random_seed
-        )
+        # Identify days above threshold
+        exceed_mask = tasmin_data > threshold_array[np.newaxis, ...]
+
+        # Sum days above threshold
+        tn90p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed TN90p with shape {tn90p.shape}")
+        return tn90p
 
     @check_supported_compute_frequencies
     def tx10p(
@@ -525,49 +513,43 @@ class PythonBackend:
         compute_fq:         str,
         tasmax_data:        np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        base_period_mask:   np.ndarray,
-        time_array:         np.ndarray,
-        time_units:         str,
-        calendar:           str,
-        window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
-        random_seed:        int | None = None,
-    ) -> dict:
-        """10th percentile of daily maximum temperature (TX10p).
-
-        Returns yearly count of days when TX < 10th percentile threshold.
-        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        threshold_array:    np.ndarray,
+    ):
+        """Number of days when daily maximum temperature < 10th percentile (TX10p).
         """
-        return self._temperature_quantiles_estimation(
-            tasmax_data, base_period_mask, time_array, time_units, calendar,
-            quantile, window_size, bootstrap_samples, random_seed
-        )
+        # Identify days below threshold
+        exceed_mask = tasmax_data < threshold_array[np.newaxis, ...]
+
+        # Sum days below threshold
+        tx10p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed TX10p with shape {tx10p.shape}")
+        return tx10p
 
     @check_supported_compute_frequencies
-    def tn10p(
+    def tx90p(
         self,
         compute_fq:         str,
-        tasmin_data:        np.ndarray,
+        tasmax_data:        np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        base_period_mask:   np.ndarray,
-        time_array:         np.ndarray,
-        time_units:         str,
-        calendar:           str,
-        window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
-        random_seed:        int | None = None,
-    ) -> dict:
-        """10th percentile of daily minimum temperature (TN10p).
-
-        Returns yearly count of days when TN < 10th percentile threshold.
-        For base-period years, uses bootstrap resampling with leave-one-year-out.
+        threshold_array:    np.ndarray,
+    ):
+        """Number of days when daily maximum temperature > 90th percentile (TX90p).
         """
-        return self._temperature_quantiles_estimation(
-            tasmin_data, base_period_mask, time_array, time_units, calendar,
-            quantile, window_size, bootstrap_samples, random_seed
-        )
+        # Identify days above threshold
+        exceed_mask = tasmax_data > threshold_array[np.newaxis, ...]
+
+        # Sum days above threshold
+        tx90p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
+
+        logger.debug(f"Computed TX90p with shape {tx90p.shape}")
+        return tx90p
+
+    # ================================================================ #
+    # === Precipitation Indices ====================================== #
+    # ================================================================ #
+    # These are impact indices using precipitation data directly or
+    # applying quantile thresholds estimated from daily data.
 
     @check_supported_compute_frequencies
     def cdd(
@@ -954,7 +936,8 @@ class PythonBackend:
         threshold_array:    np.ndarray,
         fixed_threshold:    float,
     ):
-        """Percentage contribution of very wet days to total precipitation (R95pTOT).
+        """Percentage contribution of very wet days to total
+        precipitation on wet days(R95pTOT).
 
         Contribution: 100 × (R95p / PRCPTOT)
 
@@ -992,7 +975,8 @@ class PythonBackend:
         threshold_array:    np.ndarray,
         fixed_threshold:    float,
     ):
-        """Percentage contribution of extremely wet days to total precipitation (R99pTOT).
+        """Percentage contribution of extremely wet days to total
+        precipitation on wet days (R99pTOT).
 
         Contribution: 100 × (R99p / PRCPTOT)
 
