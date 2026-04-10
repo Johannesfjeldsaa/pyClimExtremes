@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 from netCDF4 import Dataset, num2date
@@ -144,6 +144,114 @@ def _build_base_period_mask(
 	return mask
 
 
+def compute_threshold_array(
+	*,
+	index_class: type[QuantileIndex],
+	index_obj: QuantileIndex,
+	arrays: dict[str, np.ndarray],
+	units: Mapping[str, str],
+	meta: dict[str, Any],
+	time_groupings: dict[str, dict[str, np.ndarray]],
+	window_size: int = 5,
+	bootstrap_samples: int = 1000,
+	random_seed: int | None = None,
+) -> np.ndarray:
+	"""Compute the threshold array for a quantile index without writing it.
+
+	This is the shared threshold-generation path used both by
+	``compute_thresholds`` and by ``compute_indices`` when a
+	``QuantileThresholdIndex`` is requested without a saved threshold file.
+	"""
+	time_array = meta.get("time")
+	time_units = meta.get("time_units")
+	calendar = meta.get("calendar")
+
+	if time_array is None or time_units is None or calendar is None:
+		err_msg = (
+			"Missing time metadata required for quantile threshold "
+			f"index '{index_class.index_id}'."
+		)
+		logger.error(err_msg, stack_info=True)
+		raise ValueError(err_msg)
+
+	baseline_period = getattr(index_class, "baseline_period", (1981, 2010))
+	base_period_mask = _build_base_period_mask(
+		time_array=time_array,
+		time_units=time_units,
+		calendar=calendar,
+		baseline_period=baseline_period,
+	)
+
+	if index_class.index_type == "temperature":
+		compute_kwargs = {
+			"compute_fq": "yr",
+			"data_array": arrays,
+			"group_index": time_groupings["yr"]["group_index"],
+			"time_array": time_array,
+			"time_units": time_units,
+			"calendar": calendar,
+			"base_period_mask": base_period_mask,
+			"window_size": window_size,
+			"bootstrap_samples": bootstrap_samples,
+		}
+		if random_seed is not None:
+			compute_kwargs["random_seed"] = random_seed
+
+		index_obj.compute(**compute_kwargs)
+		threshold_array = index_obj.thresholds_by_doy
+	elif index_class.index_type == "precipitation":
+		if len(index_class.required_vars) != 1 or index_class.required_vars[0] != "pr":
+			err_msg = (
+				"Precipitation quantile threshold computation expects "
+				"required_vars=['pr']."
+			)
+			logger.error(err_msg, stack_info=True)
+			raise ValueError(err_msg)
+
+		if not hasattr(index_obj.compute_backend, "compute_precipitation_quantile_threshold"):
+			err_msg = (
+				"Backend does not expose precipitation quantile threshold "
+				f"helper for index '{index_class.index_id}'."
+			)
+			logger.error(err_msg, stack_info=True)
+			raise AttributeError(err_msg)
+
+		wet_day_threshold = index_class.get_wet_day_threshold(units["pr"])
+		if wet_day_threshold is None:
+			err_msg = (
+				"Precipitation quantile threshold computation requires a "
+				f"wet_day_threshold for index '{index_class.index_id}'."
+			)
+			logger.error(err_msg, stack_info=True)
+			raise ValueError(err_msg)
+
+		threshold_array = index_obj.compute_backend.compute_precipitation_quantile_threshold(
+			pr_data=arrays["pr"],
+			quantile=index_class.quantile,
+			base_period_mask=base_period_mask,
+			group_index=time_groupings["yr"]["group_index"],
+			wet_day_threshold=wet_day_threshold,
+		)
+		index_obj.thresholds_by_doy = threshold_array
+	else:
+		err_msg = (
+			f"Unsupported index_type '{index_class.index_type}' for "
+			f"index '{index_class.index_id}'."
+		)
+		logger.error(err_msg, stack_info=True)
+		raise ValueError(err_msg)
+
+	if threshold_array is None:
+		err_msg = (
+			f"Threshold computation returned None for index "
+			f"'{index_class.index_id}'."
+		)
+		logger.error(err_msg, stack_info=True)
+		raise RuntimeError(err_msg)
+
+	return np.asarray(threshold_array)
+
+
 def compute_thresholds(
 	indices: str | list[str],
 	compute_backend: str,
@@ -269,90 +377,18 @@ def compute_thresholds(
 					logger.error(err_msg, stack_info=True)
 					raise ValueError(err_msg)
 
-			compute_kwargs: dict[str, Any] = {
-				"compute_fq": "yr",
-				"data_array": arrays,
-				"group_index": time_groupings["yr"]["group_index"],
-			}
-
-			if index_class.index_type == "temperature":
-				time_array = meta.get("time")
-				time_units = meta.get("time_units")
-				calendar = meta.get("calendar")
-
-				if time_array is None or time_units is None or calendar is None:
-					err_msg = (
-						"Missing time metadata required for temperature "
-						f"quantile index '{index_class.index_id}'."
-					)
-					logger.error(err_msg, stack_info=True)
-					raise ValueError(err_msg)
-
-				baseline_period = getattr(index_class, "baseline_period", (1981, 2010))
-				base_period_mask = _build_base_period_mask(
-					time_array=time_array,
-					time_units=time_units,
-					calendar=calendar,
-					baseline_period=baseline_period,
-				)
-
-				compute_kwargs.update(
-					{
-						"time_array": time_array,
-						"time_units": time_units,
-						"calendar": calendar,
-						"base_period_mask": base_period_mask,
-						"window_size": window_size,
-						"bootstrap_samples": bootstrap_samples,
-					}
-				)
-				if random_seed is not None:
-					compute_kwargs["random_seed"] = random_seed
-
-				logger.info("Computing thresholds for %s", index_class.index_id)
-				index_obj.compute(**compute_kwargs)
-				threshold_array = index_obj.thresholds_by_doy
-			elif index_class.index_type == "precipitation":
-				if len(index_class.required_vars) != 1 or index_class.required_vars[0] != "pr":
-					err_msg = (
-						"Precipitation quantile threshold computation expects "
-						"required_vars=['pr']."
-					)
-					logger.error(err_msg, stack_info=True)
-					raise ValueError(err_msg)
-
-				pr_data = arrays["pr"]
-				if not hasattr(index_obj.compute_backend, "_compute_precipitation_quantile_threshold"):
-					err_msg = (
-						"Backend does not expose precipitation quantile threshold "
-						f"helper for index '{index_class.index_id}'."
-					)
-					logger.error(err_msg, stack_info=True)
-					raise AttributeError(err_msg)
-
-				logger.info("Computing thresholds for %s", index_class.index_id)
-				threshold_array = (
-					index_obj.compute_backend._compute_precipitation_quantile_threshold(
-						pr_data=pr_data,
-						quantile=index_class.quantile,
-					)
-				)
-				index_obj.thresholds_by_doy = threshold_array
-			else:
-				err_msg = (
-					f"Unsupported index_type '{index_class.index_type}' for "
-					f"index '{index_class.index_id}'."
-				)
-				logger.error(err_msg, stack_info=True)
-				raise ValueError(err_msg)
-
-			if threshold_array is None:
-				err_msg = (
-					f"Threshold computation returned None for index "
-					f"'{index_class.index_id}'."
-				)
-				logger.error(err_msg, stack_info=True)
-				raise RuntimeError(err_msg)
+			logger.info("Computing thresholds for %s", index_class.index_id)
+			threshold_array = compute_threshold_array(
+				index_class=index_class,
+				index_obj=index_obj,
+				arrays=arrays,
+				units=units,
+				meta=meta,
+				time_groupings=time_groupings,
+				window_size=window_size,
+				bootstrap_samples=bootstrap_samples,
+				random_seed=random_seed,
+			)
 
 			output_filename = _build_threshold_filename(index_class, meta)
 			output_path = output_dir.joinpath(output_filename)
