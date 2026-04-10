@@ -3,6 +3,8 @@ import timeit
 import inspect
 from pathlib import Path
 import numpy as np
+from netCDF4 import Dataset
+from pyClimExtremes.indices.base_index import QuantileIndex, QuantileThresholdIndex
 from pyClimExtremes.indices.registry import (
     resolve_indices,
     resolve_frequencies,
