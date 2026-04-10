@@ -1346,38 +1346,144 @@ class PythonBackend:
 
         return prcptot
 
-
-    def _compute_precipitation_quantile_threshold(
+    def _verify_base_period_mask(
         self,
         pr_data: np.ndarray,
-        quantile: float,
         base_period_mask: np.ndarray,
+        group_index: np.ndarray | None = None
     ) -> np.ndarray:
-        """Compute global perceptile threshold for precipitation data.
+        """Validate and expand base_period_mask to per-timestep boolean mask."""
+
+        base_period_mask = np.asarray(base_period_mask, dtype=bool)
+        if base_period_mask.ndim != 1:
+            err_msg = (f"base_period_mask must be 1D, got {base_period_mask.shape}")
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        n_time = pr_data.shape[0]
+
+        if base_period_mask.size == n_time:
+            time_mask = base_period_mask
+        else:
+            # Per-year mask, expand to per-timestep
+            if group_index is None:
+                raise ValueError("group_index required for per-year base_period_mask")
+
+            group_index = np.asarray(group_index)
+            if group_index.shape != (n_time,):
+                err_msg = f"group_index must be (time,), got {group_index.shape}"
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+            unique_groups = np.unique(group_index)
+            if base_period_mask.size != unique_groups.size:
+                err_msg = (
+                    f"Mask size mismatch: mask={base_period_mask.size}, "
+                    f"time={n_time}, unique_groups={unique_groups.size}"
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+            time_mask = base_period_mask[group_index.astype(int)]
+
+        return time_mask
+
+    def compute_precipitation_quantile_threshold(
+        self,
+        pr_data: np.ndarray,
+        quantile: float | list[float],
+        base_period_mask: np.ndarray,
+        group_index: np.ndarray,
+        wet_day_threshold: float,
+    ) -> np.ndarray | dict[float, np.ndarray]:
+        """
+        Compute precipitation quantile threshold(s) per grid point.
+        Uses quantile type 8 (alphap=0.375, betap=0.375) as used
+        by climdex.pcic.
 
         Parameters
         ----------
         pr_data : np.ndarray
-            Shape (time, lat, lon) — daily precipitation
-        quantile : float
-            Quantile level (0 to 1)
+            Daily precipitation data with shape (time, lat, lon).
+        quantile : float | list[float]
+            Quantile level(s) between 0 and 1. Can be single (e.g., 0.95)
+            or multiple (e.g., [0.95, 0.99]).
         base_period_mask : np.ndarray
-            Shape (num_years,) — boolean mask of base-period years to
-            include in threshold calculation
+            1D boolean array indicating which time steps belong to
+            the base period. Can follow either of two formats:
+            * Per-timestep mask of shape (time,). Used if base_period_mask is
+            same length as time dimension of pr_data.
+            * Per-year mask of shape (num_years,). Used if base_period_mask
+            is shorter than time dimension, in which case it will be expanded
+            to match the time dimension using the group_index.
+        group_index : np.ndarray
+            1D integer array of same length as time dimension of pr_data,
+            indicating group membership (e.g., year) for each time step.
+            Required if base_period_mask is a per-year mask.
+        wet_day_threshold : float
+            Minimum precipitation to consider a day "wet" and include in
+            quantile calculation. Typically 1 mm or 1/86400 kg m-2.
+            Can be found by cls.get_wet_day_threshold(`some_pr_unit`)
+            if cls is `QuantileIndex` subclass.
+
 
         Returns
         -------
-        np.ndarray
-            Threshold value per grid point
+        np.ndarray | dict
+            If single quantile: 2D array (lat, lon)
+            If multiple: dict mapping quantile -> (lat, lon) array
         """
-        valid_data = pr_data[~np.isnan(pr_data)]
-        valid_data = valid_data[base_period_mask]
+        if pr_data.ndim != 3:
+            raise ValueError(
+                f"Expected shape (time, lat, lon), got {pr_data.shape}"
+            )
 
-        if valid_data.size == 0:
+        time_mask = self._verify_base_period_mask(
+            pr_data, base_period_mask, group_index
+        )
+
+        baseline_data = pr_data[time_mask, ...]
+        if baseline_data.size == 0:
+            warn_msg = "No data in baseline period after applying mask; returning NaN"
+            logger.warning(warn_msg, stack_info=True)
             return np.full(pr_data.shape[1:], np.nan, dtype=pr_data.dtype)
 
-        percentile_value = np.percentile(valid_data, quantile * 100)
-        return np.full(pr_data.shape[1:], percentile_value, dtype=pr_data.dtype)
+        is_wet = (~np.isnan(baseline_data)) & (baseline_data >= wet_day_threshold)
+        wet_day_data = np.where(is_wet, baseline_data, np.nan)
+
+        if np.isnan(wet_day_data).all():
+            warn_msg = "No wet days in baseline period; returning NaN"
+            logger.warning(warn_msg, stack_info=True)
+            return np.full(pr_data.shape[1:], np.nan, dtype=pr_data.dtype)
+
+        n_time_base, n_lat, n_lon = wet_day_data.shape
+        wet_day_flat = wet_day_data.reshape(n_time_base, -1)  # (time, lat*lon)
+
+        # Support single or multiple quantiles
+        if isinstance(quantile, (int, float)):
+            quantiles = [float(quantile)]
+            single_quantile = True
+        else:
+            quantiles = list(quantile)
+            single_quantile = False
+
+        # NumPy's 'median_unbiased' method matches Hyndman-Fan type 8,
+        # which is the same quantile convention used by climdex here:
+        # https://numpy.org/doc/2.0/reference/generated/numpy.quantile.html
+        percentile_values = np.nanquantile(
+            wet_day_flat,
+            quantiles,
+            axis=0,
+            method="median_unbiased",
+        )
+
+        if single_quantile:
+            return percentile_values[0].reshape(n_lat, n_lon)
+        else:
+            return {
+                q: percentile_values[i].reshape(n_lat, n_lon)
+                for i, q in enumerate(quantiles)
+            }
 
     @check_supported_compute_frequencies
     def r95p(
