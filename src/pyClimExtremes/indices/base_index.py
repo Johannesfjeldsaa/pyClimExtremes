@@ -467,10 +467,35 @@ class QuantileIndex(BaseIndex):
 
     quantile: float = 0.0                   # e.g., 0.1 for 10th percentile
     baseline_period: tuple = (1981, 2010)   # (start_year, end_year)
+    wet_day_threshold: dict[str, float] | float | None = None
 
     def __init__(self, compute_backend: str, **kwargs: dict[str, Any]):
         super().__init__(compute_backend, **kwargs)
         self.thresholds_by_doy: np.ndarray | None = None
+
+    @classmethod
+    def get_wet_day_threshold(cls, input_unit: str | None = None):
+        """Resolve wet-day threshold for precipitation quantile indices.
+
+        If ``input_unit`` is provided and ``wet_day_threshold`` is a mapping,
+        return the value matching that unit. Otherwise return the stored value.
+        """
+        threshold = cls.wet_day_threshold
+        if threshold is None or input_unit is None or not isinstance(threshold, dict):
+            return threshold
+
+        input_unit_norm = unit_str_normalize(input_unit)
+        for unit_key, threshold_value in threshold.items():
+            if unit_str_normalize(unit_key) == input_unit_norm:
+                return threshold_value
+
+        err_msg = (
+            f"Could not resolve wet_day_threshold for '{cls.index_id}' "
+            f"with input unit '{input_unit}'."
+        )
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
 
     def compute(
         self,

@@ -104,16 +104,16 @@ class TN10pIndex(QuantileIndex):
 
 
 @register_index
-class R95pIndex(QuantileIndex):
+class q95prIndex(QuantileIndex):
     """
-    Annual total precipitation on very wet days (r95pETCCDI).
-    
+    Annual total precipitation on very wet days (q95pr).
+
     Very wet days are defined as days with daily precipitation > 95th percentile.
     """
 
     index_type = "precipitation"
-    index_id = "r95pETCCDI"
-    index_aliases = ["r95p", "R95p", "r95pETCCDI"]
+    index_id = "q95pr"
+    index_aliases = ["q95pr", "Q95pr"]
     index_long_name = "Annual total precipitation on very wet days (>95th percentile)"
     index_units = "mm"
     unit_after_aggregation = {
@@ -123,22 +123,25 @@ class R95pIndex(QuantileIndex):
     quantile = 0.95
     required_vars = ["pr"]
     frequencies = ["yr"]
-    backend_callable_name = "r95p"
+    backend_callable_name = "q95pr"
     baseline_period = (1981, 2010)
-    fixed_threshold = None  # Not used; quantile computed from data
 
+    wet_day_threshold = {
+        "mm d-1": 1.0,
+        "kg m-2 s-1": 1.0 / 86400.0
+    }
 
 @register_index
-class R99pIndex(QuantileIndex):
+class q99prIndex(QuantileIndex):
     """
-    Annual total precipitation on extremely wet days (r99pETCCDI).
+    Annual total precipitation on extremely wet days (q99pr).
 
     Extremely wet days are defined as days with daily precipitation > 99th percentile.
     """
 
     index_type = "precipitation"
-    index_id = "r99pETCCDI"
-    index_aliases = ["r99p", "R99p", "r99pETCCDI"]
+    index_id = "q99pr"
+    index_aliases = ["q99pr", "Q99pr"]
     index_long_name = "Annual total precipitation on extremely wet days (>99th percentile)"
     index_units = "mm"
     unit_after_aggregation = {
@@ -148,6 +151,9 @@ class R99pIndex(QuantileIndex):
     quantile = 0.99
     required_vars = ["pr"]
     frequencies = ["yr"]
-    backend_callable_name = "r99p"
+    backend_callable_name = "q99pr"
     baseline_period = (1981, 2010)
-    fixed_threshold = None  # Not used; quantile computed from data
+    wet_day_threshold = {
+        "mm d-1": 1.0,
+        "kg m-2 s-1": 1.0 / 86400.0
+    }
