@@ -28,6 +28,7 @@ dev = [
   "mypy",
   "ipykernel",
   "cartopy",
+  "nc_time_axis",
 ]
 
 [tool.setuptools.packages.find]
