@@ -511,6 +511,7 @@ class QuantileIndex(BaseIndex):
         window_size:        int = 5,
         bootstrap_samples:  int = 1000,
         random_seed:        int | None = None,
+        wet_day_threshold:  float | None = None,
     ):
         """Compute quantile-based index with optional bootstrap for base period.
 
@@ -567,6 +568,24 @@ class QuantileIndex(BaseIndex):
             quantile_time_array = time_array
             quantile_time_units = time_units
             quantile_calendar = calendar
+        elif self.index_type == "precipitation":
+            if base_period_mask is None:
+                err_msg = (
+                    "base_period_mask is required for precipitation quantile indices"
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+            if wet_day_threshold is None:
+                err_msg = (
+                    f"wet_day_threshold is required for precipitation quantile "
+                    f"index '{self.index_id}'"
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+            extra_kwargs["base_period_mask"] = base_period_mask
+            extra_kwargs["wet_day_threshold"] = wet_day_threshold
 
         result = self._compute_with_kwargs(
             validated_data,

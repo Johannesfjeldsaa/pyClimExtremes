@@ -200,24 +200,8 @@ def compute_threshold_array(
 		index_obj.compute(**compute_kwargs)
 		threshold_array = index_obj.thresholds_by_doy
 	elif index_class.index_type == "precipitation":
-		if len(index_class.required_vars) != 1 or index_class.required_vars[0] != "pr":
-			err_msg = (
-				"Precipitation quantile threshold computation expects "
-				"required_vars=['pr']."
-			)
-			logger.error(err_msg, stack_info=True)
-			raise ValueError(err_msg)
-
-		if not hasattr(index_obj.compute_backend, "compute_precipitation_quantile_threshold"):
-			err_msg = (
-				"Backend does not expose precipitation quantile threshold "
-				f"helper for index '{index_class.index_id}'."
-			)
-			logger.error(err_msg, stack_info=True)
-			raise AttributeError(err_msg)
-
 		wet_day_threshold = index_class.get_wet_day_threshold(units["pr"])
-		if wet_day_threshold is None:
+		if wet_day_threshold is None or isinstance(wet_day_threshold, dict):
 			err_msg = (
 				"Precipitation quantile threshold computation requires a "
 				f"wet_day_threshold for index '{index_class.index_id}'."
@@ -225,14 +209,14 @@ def compute_threshold_array(
 			logger.error(err_msg, stack_info=True)
 			raise ValueError(err_msg)
 
-		threshold_array = index_obj.compute_backend.compute_precipitation_quantile_threshold(
-			pr_data=arrays["pr"],
-			quantile=index_class.quantile,
-			base_period_mask=base_period_mask,
+		threshold_array = index_obj.compute(
+			compute_fq="yr",
+			data_array=arrays,
 			group_index=time_groupings["yr"]["group_index"],
-			wet_day_threshold=wet_day_threshold,
+			base_period_mask=base_period_mask,
+			wet_day_threshold=float(wet_day_threshold),
 		)
-		index_obj.thresholds_by_doy = threshold_array
+		index_obj.thresholds_by_doy = np.asarray(threshold_array)
 	else:
 		err_msg = (
 			f"Unsupported index_type '{index_class.index_type}' for "
