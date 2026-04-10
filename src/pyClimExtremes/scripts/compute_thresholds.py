@@ -19,13 +19,12 @@ def _build_threshold_filename(index_class: type, meta: dict[str, Any]) -> str:
 	source_id = str(meta.get("source_id", "unknown"))
 	experiment_id = str(meta.get("experiment_id", "unknown"))
 	variant_label = str(meta.get("variant_label", "unknown"))
-	yyyymm_start = str(meta.get("YYYYMM_start", "unknown"))
-	yyyymm_end = str(meta.get("YYYYMM_end", "unknown"))
+	baseline_period = index_class.baseline_period
 
 	return (
 		f"{index_class.index_id}_threshold_"
 		f"{source_id}_{experiment_id}_{variant_label}_"
-		f"{yyyymm_start}_{yyyymm_end}.nc"
+		f"{baseline_period[0]}-{baseline_period[1]}.nc"
 	)
 
 
