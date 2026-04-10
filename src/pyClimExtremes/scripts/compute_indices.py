@@ -14,6 +14,7 @@ from pyClimExtremes.indices.units_utils import (
     unit_str_normalize,
     convert_units,
 )
+from pyClimExtremes.scripts.compute_thresholds import compute_threshold_array
 from pyClimExtremes.io.data_wrapping import (
     prepare_inputs_and_meta,
     prepare_time_groupings,
@@ -27,6 +28,145 @@ from pyClimExtremes.logging.setup_logging import get_logger
 logger = get_logger(__name__)
 
 _UNKNOWN_META_STRINGS = {"", "unknown", "none", "null", "nan", "na"}
+
+
+def _normalize_quantile_threshold_files(
+    quantile_threshold_files,
+) -> dict[str, Path]:
+    """Normalize saved quantile-threshold files to a mapping by threshold id."""
+    if quantile_threshold_files is None:
+        return {}
+
+    normalized: dict[str, Path] = {}
+    if isinstance(quantile_threshold_files, dict):
+        items = quantile_threshold_files.items()
+    else:
+        items = []
+        for file_path in quantile_threshold_files:
+            path = Path(file_path)
+            stem = path.stem
+            if "_threshold_" not in stem:
+                err_msg = (
+                    "Quantile threshold file names must contain '_threshold_' "
+                    f"to infer the source threshold id: {path}"
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+            items.append((stem.split("_threshold_", 1)[0], path))
+
+    for threshold_id, file_path in items:
+        path = Path(file_path)
+        if not path.exists():
+            err_msg = f"Quantile threshold file not found: {path}"
+            logger.error(err_msg, stack_info=True)
+            raise FileNotFoundError(err_msg)
+        normalized[str(threshold_id)] = path
+
+    return normalized
+
+
+def _load_quantile_threshold_array(path: Path) -> np.ndarray:
+    """Load the threshold variable from a saved quantile-threshold NetCDF."""
+    with Dataset(path) as ds:
+        if "threshold" not in ds.variables:
+            err_msg = f"No 'threshold' variable found in quantile threshold file: {path}"
+            logger.error(err_msg, stack_info=True)
+            raise KeyError(err_msg)
+        return np.asarray(ds.variables["threshold"][:])
+
+
+def _resolve_quantile_index_class(threshold_index_id: str) -> type[QuantileIndex]:
+    """Resolve and validate the QuantileIndex class backing a threshold id."""
+    resolved = resolve_indices([threshold_index_id])
+    if len(resolved) != 1:
+        err_msg = (
+            "Expected exactly one quantile threshold source index for "
+            f"'{threshold_index_id}', got {len(resolved)}."
+        )
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
+    threshold_index_class = resolved[0]
+    if not issubclass(threshold_index_class, QuantileIndex):
+        err_msg = (
+            f"Threshold source index '{threshold_index_id}' must resolve to a "
+            "QuantileIndex subclass."
+        )
+        logger.error(err_msg, stack_info=True)
+        raise TypeError(err_msg)
+
+    return threshold_index_class
+
+
+def _get_or_compute_quantile_threshold_array(
+    *,
+    threshold_index_id: str,
+    quantile_threshold_files: dict[str, Path],
+    quantile_threshold_cache: dict[str | Path, np.ndarray],
+    compute_backend: str,
+    backend_kwargs: dict,
+    wrappers: dict,
+    meta: dict,
+    time_groupings: dict[str, dict[str, np.ndarray]],
+    window_size: int,
+    bootstrap_samples: int,
+    random_seed: int | None,
+) -> np.ndarray:
+    """Return a quantile-threshold array from cache, file, or in-memory generation."""
+    threshold_file = quantile_threshold_files.get(threshold_index_id)
+    cache_key: str | Path = threshold_file if threshold_file is not None else threshold_index_id
+
+    if cache_key in quantile_threshold_cache:
+        return quantile_threshold_cache[cache_key]
+
+    if threshold_file is not None:
+        threshold_array = _load_quantile_threshold_array(threshold_file)
+    else:
+        threshold_index_class = _resolve_quantile_index_class(threshold_index_id)
+        threshold_index_obj = threshold_index_class(compute_backend, **backend_kwargs)
+        threshold_arrays = {
+            var: wrappers[var].load_ndarray(var)
+            for var in threshold_index_class.required_vars
+        }
+        threshold_units = {
+            var: wrappers[var].get_units(var)
+            for var in threshold_index_class.required_vars
+        }
+
+        for var, unit in threshold_units.items():
+            if unit is None:
+                err_msg = (
+                    f"Input variable '{var}' is missing units for "
+                    f"threshold source index '{threshold_index_id}'."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+            if not validate_input_units(var, unit):
+                err_msg = (
+                    f"Invalid input units '{unit}' for variable '{var}' "
+                    f"used by threshold source index '{threshold_index_id}'."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+
+        logger.info(
+            "Generating quantile threshold array for '%s' in memory.",
+            threshold_index_id,
+        )
+        threshold_array = compute_threshold_array(
+            index_class=threshold_index_class,
+            index_obj=threshold_index_obj,
+            arrays=threshold_arrays,
+            units=threshold_units,
+            meta=meta,
+            time_groupings=time_groupings,
+            window_size=window_size,
+            bootstrap_samples=bootstrap_samples,
+            random_seed=random_seed,
+        )
+
+    quantile_threshold_cache[cache_key] = np.asarray(threshold_array)
+    return quantile_threshold_cache[cache_key]
 
 
 def _is_missing_or_unknown_meta(value) -> bool:
@@ -127,6 +267,15 @@ def compute_indices(
             * Usage of index aliases as keys is also supported.
         - 'backend_kwargs': dict of additional kwargs to pass to the compute
             backend when initializing index classes.
+        - 'quantile_threshold_files': saved quantile-threshold NetCDF files
+            used by quantile-threshold precipitation indices. This can be a
+            dict like {'q95pr': path1, 'q99pr': path2} or a list of files whose
+            names follow '<threshold_id>_threshold_*.nc'. If omitted, the
+            required threshold array is generated in memory and cached for the
+            duration of the compute_indices call.
+        - 'window_size', 'bootstrap_samples', 'random_seed': optional quantile
+            threshold generation settings used when in-memory threshold
+            generation is needed for quantile-threshold indices.
     """
 
     # ------------------------------------ #
@@ -141,6 +290,13 @@ def compute_indices(
     threshold_dict = kwargs.get('threshold', {})
     spells_can_span_groups_dict = kwargs.get('spells_can_span_groups', {})
     backend_kwargs = kwargs.get('backend_kwargs', {})
+    window_size = kwargs.get('window_size', 5)
+    bootstrap_samples = kwargs.get('bootstrap_samples', 1000)
+    random_seed = kwargs.get('random_seed', None)
+    quantile_threshold_files = _normalize_quantile_threshold_files(
+        kwargs.get('quantile_threshold_files', None)
+    )
+    quantile_threshold_cache: dict[str | Path, np.ndarray] = {}
 
     # Filter out ThresholdIndex with default_threshold = None
     # unless explicitly requested in threshold_dict
@@ -368,6 +524,10 @@ def compute_indices(
             #   'default_threshold' attribute is used.
 
             is_threshold_index = hasattr(index_class, 'default_threshold')
+            is_quantile_threshold_index = issubclass(
+                index_class,
+                QuantileThresholdIndex,
+            )
 
             # Look for threshold values for this index in the threshold dict
             # Check both index_id and any aliases
@@ -388,7 +548,7 @@ def compute_indices(
             thresholds_to_run: list[float | None] = []
             if is_threshold_index:
                 if user_thresholds:
-                    thresholds_to_run = user_thresholds
+                    thresholds_to_run = list(user_thresholds)
                 else:
                     default_threshold = getattr(index_class, 'default_threshold', None)
                     if default_threshold is None:
@@ -504,6 +664,41 @@ def compute_indices(
                     comp_info += (
                         f"spells_can_span_groups = {spell_span_groups_value}."
                     )
+
+                if is_quantile_threshold_index:
+                    threshold_index_id = getattr(
+                        index_class,
+                        'quantile_threshold_index_id',
+                        None,
+                    )
+                    if threshold_index_id is None:
+                        err_msg = (
+                            f"Quantile-threshold index '{index_class.index_id}' is missing "
+                            "the 'quantile_threshold_index_id' attribute."
+                        )
+                        logger.error(err_msg, stack_info=True)
+                        raise ValueError(err_msg)
+
+                    threshold_file = quantile_threshold_files.get(threshold_index_id)
+                    compute_kwargs["quantile_thresholds"] = _get_or_compute_quantile_threshold_array(
+                        threshold_index_id=threshold_index_id,
+                        quantile_threshold_files=quantile_threshold_files,
+                        quantile_threshold_cache=quantile_threshold_cache,
+                        compute_backend=compute_backend,
+                        backend_kwargs=backend_kwargs,
+                        wrappers=wrappers,
+                        meta=meta,
+                        time_groupings=time_groupings,
+                        window_size=window_size,
+                        bootstrap_samples=bootstrap_samples,
+                        random_seed=random_seed,
+                    )
+                    if threshold_file is not None:
+                        comp_info += f"quantile_threshold_file = {threshold_file}."
+                    else:
+                        comp_info += (
+                            f"quantile_threshold_generated = {threshold_index_id}."
+                        )
 
                 try:
                     logger.info(comp_info)
