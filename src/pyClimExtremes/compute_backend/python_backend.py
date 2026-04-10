@@ -1490,27 +1490,14 @@ class PythonBackend:
         compute_fq:         str,
         pr_data:            np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        threshold_array:    np.ndarray | None = None,
+        threshold_array:    np.ndarray,
     ):
         """Sum of precipitation on very wet days (R95p).
 
         Total precipitation on days with daily precipitation > 95th percentile.
-
-        Parameters
-        ----------
-        threshold_array : np.ndarray | None, optional
-            Pre-computed threshold (e.g., from QuantileThresholdIndex).
-            If None, computed from quantile.
         """
-        # Use provided threshold or compute from quantile
-        if threshold_array is None:
-            threshold = self._compute_precipitation_quantile_threshold(pr_data, quantile, base_period_mask)
-        else:
-            threshold = threshold_array
-
         # Identify days exceeding threshold
-        exceed_mask = pr_data > threshold[np.newaxis, ...]
+        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
 
         # Sum precipitation on wet days
         r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
@@ -1524,27 +1511,14 @@ class PythonBackend:
         compute_fq:         str,
         pr_data:            np.ndarray,
         group_index:        np.ndarray,
-        quantile:           float,
-        threshold_array:    np.ndarray | None = None,
+        threshold_array:    np.ndarray,
     ):
         """Sum of precipitation on extremely wet days (R99p).
 
         Total precipitation on days with daily precipitation > 99th percentile.
-
-        Parameters
-        ----------
-        threshold_array : np.ndarray | None, optional
-            Pre-computed threshold (e.g., from QuantileThresholdIndex).
-            If None, computed from quantile.
         """
-        # Use provided threshold or compute from quantile
-        if threshold_array is None:
-            threshold = self._compute_precipitation_quantile_threshold(pr_data, quantile)
-        else:
-            threshold = threshold_array
-
         # Identify days exceeding threshold
-        exceed_mask = pr_data > threshold[np.newaxis, ...]
+        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
 
         # Sum precipitation on wet days
         r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
@@ -1559,6 +1533,7 @@ class PythonBackend:
         pr_data:            np.ndarray,
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
+        fixed_threshold:    float,
     ):
         """Percentage contribution of very wet days to total precipitation (R95pTOT).
 
@@ -1574,11 +1549,17 @@ class PythonBackend:
         r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
 
         # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
-        wet_mask = pr_data >= 1.0  # 1 mm threshold
+        wet_mask = pr_data >= fixed_threshold
         prcptot = self._aggregate_by_group(pr_data * wet_mask, group_index, np.sum)
 
         # Avoid division by zero
-        r95p_tot = np.where(prcptot > 0, 100.0 * r95p / prcptot, np.nan)
+        r95p_tot = np.full(prcptot.shape, np.nan, dtype=float)
+        np.divide(
+            100.0 * r95p,
+            prcptot,
+            out=r95p_tot,
+            where=prcptot > 0,
+        )
 
         logger.debug(f"Computed R95pTOT with shape {r95p_tot.shape}")
         return r95p_tot
@@ -1590,6 +1571,7 @@ class PythonBackend:
         pr_data:            np.ndarray,
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
+        fixed_threshold:    float,
     ):
         """Percentage contribution of extremely wet days to total precipitation (R99pTOT).
 
@@ -1605,11 +1587,17 @@ class PythonBackend:
         r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
 
         # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
-        wet_mask = pr_data >= 1.0  # 1 mm threshold
+        wet_mask = pr_data >= fixed_threshold
         prcptot = self._aggregate_by_group(pr_data * wet_mask, group_index, np.sum)
 
         # Avoid division by zero
-        r99p_tot = np.where(prcptot > 0, 100.0 * r99p / prcptot, np.nan)
+        r99p_tot = np.full(prcptot.shape, np.nan, dtype=float)
+        np.divide(
+            100.0 * r99p,
+            prcptot,
+            out=r99p_tot,
+            where=prcptot > 0,
+        )
 
         logger.debug(f"Computed R99pTOT with shape {r99p_tot.shape}")
         return r99p_tot
