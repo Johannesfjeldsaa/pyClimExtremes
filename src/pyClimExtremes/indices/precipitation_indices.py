@@ -285,7 +285,7 @@ class R95pIndex(QuantileThresholdIndex):
     frequencies = ["yr"]
     backend_callable_name = "r95p"
     fixed_threshold = None
-    quantile_threshold_index_id = "q95pr"
+    quantile_threshold_index_id = "pr_q95p"
 
 
 @register_index
@@ -311,7 +311,7 @@ class R99pIndex(QuantileThresholdIndex):
     frequencies = ["yr"]
     backend_callable_name = "r99p"
     fixed_threshold = None
-    quantile_threshold_index_id = "q99pr"
+    quantile_threshold_index_id = "pr_q99p"
 
 
 
@@ -342,7 +342,7 @@ class R95pTOTIndex(QuantileThresholdIndex):
         "mm d-1": 1.0,
         "kg m-2 s-1": 1.0 / 86400.0
     }
-    quantile_threshold_index_id = "q95pr"
+    quantile_threshold_index_id = "pr_q95p"
 
 
 @register_index
@@ -371,4 +371,4 @@ class R99pTOTIndex(QuantileThresholdIndex):
         "mm d-1": 1.0,
         "kg m-2 s-1": 1.0 / 86400.0
     }
-    quantile_threshold_index_id = "q99pr"
+    quantile_threshold_index_id = "pr_q99p"

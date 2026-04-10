@@ -13,108 +13,115 @@ logger = get_logger(__name__)
 
 
 @register_index
-class TX90pIndex(QuantileIndex):
+class tn_q10pIndex(QuantileIndex):
     """
-    90th percentile of daily maximum temperature (tx90pETCCDI).
-    """
-
-    index_type = "temperature"
-    index_id = "tx90pETCCDI"
-    index_aliases = ["tx90p", "TX90p", "tx90pETCCDI"]
-    index_long_name = "Annual number of days with TX > 90th percentile of baseline"
-    index_units = "days"
-    unit_after_aggregation = {
-        'deg_C': "days",
-        'K': "days"
-    }
-    quantile = 0.9
-    required_vars = ["tasmax"]
-    frequencies = ["yr"]
-    backend_callable_name = "tx90p"
-    baseline_period = (1981, 2010)
-
-
-@register_index
-class TN90pIndex(QuantileIndex):
-    """
-    90th percentile of daily minimum temperature (tn90pETCCDI).
+    10th percentile of daily minimum temperature (tn_q10p)
     """
 
     index_type = "temperature"
-    index_id = "tn90pETCCDI"
-    index_aliases = ["tn90p", "TN90p", "tn90pETCCDI"]
-    index_long_name = "Annual number of days with TN > 90th percentile of baseline"
-    index_units = "days"
+    index_id = "tn_q10p"
+    index_aliases = ["tn_q10p", "TN_Q10P"]
+    index_long_name = "10th percentile of daily minimum temperature (degC) during the baseline period"
+    index_units = "degC"
     unit_after_aggregation = {
-        'deg_C': "days",
-        'K': "days"
-    }
-    quantile = 0.9
-    required_vars = ["tasmin"]
-    frequencies = ["yr"]
-    backend_callable_name = "tn90p"
-    baseline_period = (1981, 2010)
-
-
-@register_index
-class TX10pIndex(QuantileIndex):
-    """
-    10th percentile of daily maximum temperature (tx10pETCCDI).
-    """
-
-    index_type = "temperature"
-    index_id = "tx10pETCCDI"
-    index_aliases = ["tx10p", "TX10p", "tx10pETCCDI"]
-    index_long_name = "Annual number of days with TX < 10th percentile of baseline"
-    index_units = "days"
-    unit_after_aggregation = {
-        'deg_C': "days",
-        'K': "days"
-    }
-    quantile = 0.1
-    required_vars = ["tasmax"]
-    frequencies = ["yr"]
-    backend_callable_name = "tx10p"
-    baseline_period = (1981, 2010)
-
-
-@register_index
-class TN10pIndex(QuantileIndex):
-    """
-    10th percentile of daily minimum temperature (tn10pETCCDI).
-    """
-
-    index_type = "temperature"
-    index_id = "tn10pETCCDI"
-    index_aliases = ["tn10p", "TN10p", "tn10pETCCDI"]
-    index_long_name = "Annual number of days with TN < 10th percentile of baseline"
-    index_units = "days"
-    unit_after_aggregation = {
-        'deg_C': "days",
-        'K': "days"
+        'deg_C': "degC",
+        'K': "K"
     }
     quantile = 0.1
     required_vars = ["tasmin"]
     frequencies = ["yr"]
-    backend_callable_name = "tn10p"
+    backend_callable_name = "tn_q10p"
     baseline_period = (1981, 2010)
 
+    wet_day_threshold = None    # Not applicable for temperature indices,
+                                # but required by the QuantileIndex
+
+@register_index
+class tn_q90pIndex(QuantileIndex):
+    """
+    90th percentile of daily minimum temperature (tn_q90p).
+    """
+
+    index_type = "temperature"
+    index_id = "tn_q90p"
+    index_aliases = ["tn_q90p", "T_Q90P"]
+    index_long_name = "90th percentile of daily minimum temperature (degC) during the baseline period"
+    index_units = "degC"
+    unit_after_aggregation = {
+        'deg_C': "degC",
+        'K': "K"
+    }
+    quantile = 0.9
+    required_vars = ["tasmin"]
+    frequencies = ["yr"]
+    backend_callable_name = "tn_q90p"
+    baseline_period = (1981, 2010)
+
+    wet_day_threshold = None    # Not applicable for temperature indices,
+                                # but required by the QuantileIndex
+
+@register_index
+class tx_q10pIndex(QuantileIndex):
+    """
+    10th percentile of daily maximum temperature (tx_q10p).
+    """
+
+    index_type = "temperature"
+    index_id = "tx_q10p"
+    index_aliases = ["tx_q10p", "T_Q10P"]
+    index_long_name = "10th percentile of daily maximum temperature (degC) during the baseline period"
+    index_units = "degC"
+    unit_after_aggregation = {
+        'deg_C': "degC",
+        'K': "K"
+    }
+    quantile = 0.1
+    required_vars = ["tasmax"]
+    frequencies = ["yr"]
+    backend_callable_name = "tx_q10p"
+    baseline_period = (1981, 2010)
+
+    wet_day_threshold = None    # Not applicable for temperature indices,
+                                # but required by the QuantileIndex
+
+
+@register_index
+class tx_q90pIndex(QuantileIndex):
+    """
+    90th percentile of daily maximum temperature (tx_q90p).
+    """
+
+    index_type = "temperature"
+    index_id = "tx_q90p"
+    index_aliases = ["tx_q90p", "TX_Q90P"]
+    index_long_name = "90th percentile of daily maximum temperature (degC) during the baseline period"
+    index_units = "degC"
+    unit_after_aggregation = {
+        'deg_C': "degC",
+        'K': "K"
+    }
+    quantile = 0.9
+    required_vars = ["tasmax"]
+    frequencies = ["yr"]
+    backend_callable_name = "tx_q90p"
+    baseline_period = (1981, 2010)
+
+    wet_day_threshold = None    # Not applicable for temperature indices,
+                                # but required by the QuantileIndex
 
 # ==================== PRECIPITATION QUANTILE INDICES ====================
 
 
 @register_index
-class q95prIndex(QuantileIndex):
+class pr_q95pIndex(QuantileIndex):
     """
-    Annual total precipitation on very wet days (q95pr).
-
-    Very wet days are defined as days with daily precipitation > 95th percentile.
+    95th percentile of daily precipitation (pr_q95p).
     """
 
     index_type = "precipitation"
-    index_id = "q95pr"
-    index_aliases = ["q95pr", "Q95pr"]
-    index_long_name = "Annual total precipitation on very wet days (>95th percentile)"
+    index_id = "pr_q95p"
+    index_aliases = ["pr_q95p", "PR_Q95P"]
+    index_long_name = "95th percentile of daily precipitation (mm/day) during the baseline period"
     index_units = "mm"
     unit_after_aggregation = {
         "mm d-1": "mm",
@@ -123,7 +130,7 @@ class q95prIndex(QuantileIndex):
     quantile = 0.95
     required_vars = ["pr"]
     frequencies = ["yr"]
-    backend_callable_name = "q95pr"
+    backend_callable_name = "pr_q95p"
     baseline_period = (1981, 2010)
 
     wet_day_threshold = {
@@ -132,17 +139,15 @@ class q95prIndex(QuantileIndex):
     }
 
 @register_index
-class q99prIndex(QuantileIndex):
+class pr_q99pIndex(QuantileIndex):
     """
-    Annual total precipitation on extremely wet days (q99pr).
-
-    Extremely wet days are defined as days with daily precipitation > 99th percentile.
+    99th percentile of daily precipitation (pr_q99p).
     """
 
     index_type = "precipitation"
-    index_id = "q99pr"
-    index_aliases = ["q99pr", "Q99pr"]
-    index_long_name = "Annual total precipitation on extremely wet days (>99th percentile)"
+    index_id = "pr_q99p"
+    index_aliases = ["pr_q99p", "PR_Q99P"]
+    index_long_name = "99th percentile of daily precipitation (mm/day) during the baseline period"
     index_units = "mm"
     unit_after_aggregation = {
         "mm d-1": "mm",
@@ -151,7 +156,7 @@ class q99prIndex(QuantileIndex):
     quantile = 0.99
     required_vars = ["pr"]
     frequencies = ["yr"]
-    backend_callable_name = "q99pr"
+    backend_callable_name = "pr_q99p"
     baseline_period = (1981, 2010)
     wet_day_threshold = {
         "mm d-1": 1.0,

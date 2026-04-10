@@ -271,7 +271,7 @@ def compute_indices(
             backend when initializing index classes.
         - 'quantile_threshold_files': saved quantile-threshold NetCDF files
             used by quantile-threshold precipitation indices. This can be a
-            dict like {'q95pr': path1, 'q99pr': path2} or a list of files whose
+            dict like {'pr_q95p': path1, 'pr_q99p': path2} or a list of files whose
             names follow '<threshold_id>_threshold_*.nc'. If omitted, the
             required threshold array is generated in memory and cached for the
             duration of the compute_indices call.
