@@ -6,6 +6,7 @@ import numpy as np
 
 from pyClimExtremes.compute_backend.backend_registry import get_compute_backend
 from pyClimExtremes.indices.registry import INPUT_VAR_ALIASES
+from pyClimExtremes.indices.units_utils import unit_str_normalize
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
