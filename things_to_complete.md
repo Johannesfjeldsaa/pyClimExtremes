@@ -17,25 +17,25 @@
 
 # 1. Temperature Threshold Indices
 
-## FD (Frost Days)
+## FD (Frost Days) ✅
 - Core idea: count freezing nights
 - Definition: number of days where TN < 0°C
 - Data: daily minimum temperature
 - Interpretation: cold climate severity
 - Resources: Climdex FD
 
-## SU (Summer Days)
+## SU (Summer Days) ✅
 - Core idea: count hot days
 - Definition: TX > 25°C
 - Data: daily max temperature
 - Interpretation: heat exposure
 
-## ID (Icing Days)
+## ID (Icing Days) ✅
 - Core idea: persistent freezing
 - Definition: TX < 0°C
 - Interpretation: severe cold daytime conditions
 
-## TR (Tropical Nights)
+## TR (Tropical Nights) ✅
 - Core idea: warm nights
 - Definition: TN > 20°C
 - Interpretation: heat stress (especially human health)
@@ -71,18 +71,18 @@
 
 # 3. Absolute Temperature Extremes
 
-## TXx (Max Tmax)
+## TXx (Max Tmax) ✅
 - Core idea: hottest day
 - Definition: max(TX)
 - Interpretation: extreme heat
 
-## TNx (Max Tmin)
+## TNx (Max Tmin) ✅
 - Core idea: warmest night
 
-## TXn (Min Tmax)
+## TXn (Min Tmax) ✅
 - Core idea: coldest day
 
-## TNn (Min Tmin)
+## TNn (Min Tmin) ✅
 - Core idea: coldest night
 
 ---
@@ -134,7 +134,7 @@
 
 # 6. Mean and Derived Temperature Metrics
 
-## DTR (Diurnal Temperature Range)
+## DTR (Diurnal Temperature Range) ✅
 - Core idea: daily variability
 - Formula: TX − TN (averaged)
 - Interpretation: cloudiness, climate variability
@@ -171,12 +171,12 @@
 
 # 8. Precipitation Intensity & Totals
 
-## PRCPTOT
+## PRCPTOT ✅
 - Core idea: total rainfall
 - Definition: sum(RR ≥ 1 mm)
 - Interpretation: total wet-day precipitation
 
-## SDII (Simple Daily Intensity Index)
+## SDII (Simple Daily Intensity Index) ✅
 - Core idea: rainfall intensity
 - Formula: total precipitation / number of wet days
 
@@ -184,15 +184,15 @@
 
 # 9. Heavy Precipitation Indices
 
-## R10mm / R20mm / Rnnmm
+## R10mm / R20mm / Rnnmm ✅
 - Core idea: heavy rain frequency
 - Definition: count of days RR ≥ threshold
 
-## Rx1day
+## Rx1day ✅
 - Core idea: extreme daily rainfall
 - Definition: max(RR)
 
-## Rx5day
+## Rx5day ✅
 - Core idea: multi-day extreme rainfall
 - Definition: max 5-day accumulated precipitation
 
@@ -217,11 +217,11 @@
 
 # 11. Wet/Dry Spell Indices
 
-## CDD (Consecutive Dry Days)
+## CDD (Consecutive Dry Days) ✅
 - Core idea: drought duration
 - Definition: max consecutive RR < 1 mm
 
-## CWD (Consecutive Wet Days)
+## CWD (Consecutive Wet Days) ✅
 - Core idea: persistent rainfall
 - Definition: max consecutive RR ≥ 1 mm
 
