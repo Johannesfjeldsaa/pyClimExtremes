@@ -601,6 +601,8 @@ class QuantileThresholdIndex(BaseIndex):
     2. By reference to a QuantileIndex instance via quantile_index parameter
     """
 
+    quantile_threshold_index_id: str | None = None
+
     def compute(
         self,
         compute_fq:         str,
@@ -612,6 +614,7 @@ class QuantileThresholdIndex(BaseIndex):
         lat:                np.ndarray | None = None,
         quantile_thresholds: np.ndarray | None = None,
         quantile_index:     'QuantileIndex | None' = None,
+        fixed_threshold:    dict[str, float] | float | None = None,
     ):
         """Compute a threshold-based index using quantile thresholds.
 
@@ -663,5 +666,8 @@ class QuantileThresholdIndex(BaseIndex):
             time_units=time_units,
             calendar=calendar,
             lat=lat,
-            extra_kwargs={"threshold_array": thresholds_array},
+            extra_kwargs={
+                "threshold_array": thresholds_array,
+                "fixed_threshold": fixed_threshold,
+            },
         )

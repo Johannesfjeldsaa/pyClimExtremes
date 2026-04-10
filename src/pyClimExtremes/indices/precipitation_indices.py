@@ -262,6 +262,58 @@ class SDIIINDEX(BaseIndex):
     backend_callable_name = "sdii"
 
 
+@register_index
+class R95pIndex(QuantileThresholdIndex):
+    """
+    Annual total precipitation when daily precipitation exceeds the 95th
+    percentile of wet-day precipitation (r95pETCCDI).
+    """
+
+    index_type = "precipitation"
+    index_id = "r95pETCCDI"
+    index_aliases = ["r95p", "R95p", "r95pETCCDI"]
+    index_long_name = (
+        "Annual total precipitation when daily precipitation exceeds the "
+        "95th percentile of wet-day precipitation"
+    )
+    index_units = "mm"
+    unit_after_aggregation = {
+        "mm d-1": "mm",
+        "kg m-2 s-1": "kg m-2"
+    }
+    required_vars = ["pr"]
+    frequencies = ["yr"]
+    backend_callable_name = "r95p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "q95pr"
+
+
+@register_index
+class R99pIndex(QuantileThresholdIndex):
+    """
+    Annual total precipitation when daily precipitation exceeds the 99th
+    percentile of wet-day precipitation (r99pETCCDI).
+    """
+
+    index_type = "precipitation"
+    index_id = "r99pETCCDI"
+    index_aliases = ["r99p", "R99p", "r99pETCCDI"]
+    index_long_name = (
+        "Annual total precipitation when daily precipitation exceeds the "
+        "99th percentile of wet-day precipitation"
+    )
+    index_units = "mm"
+    unit_after_aggregation = {
+        "mm d-1": "mm",
+        "kg m-2 s-1": "kg m-2"
+    }
+    required_vars = ["pr"]
+    frequencies = ["yr"]
+    backend_callable_name = "r99p"
+    fixed_threshold = None
+    quantile_threshold_index_id = "q99pr"
+
+
 
 
 @register_index
@@ -286,7 +338,11 @@ class R95pTOTIndex(QuantileThresholdIndex):
     required_vars = ["pr"]
     frequencies = ["yr"]
     backend_callable_name = "r95p_tot"
-    fixed_threshold = None
+    fixed_threshold = { # used for prcptot calculation
+        "mm d-1": 1.0,
+        "kg m-2 s-1": 1.0 / 86400.0
+    }
+    quantile_threshold_index_id = "q95pr"
 
 
 @register_index
@@ -311,4 +367,8 @@ class R99pTOTIndex(QuantileThresholdIndex):
     required_vars = ["pr"]
     frequencies = ["yr"]
     backend_callable_name = "r99p_tot"
-    fixed_threshold = None
+    fixed_threshold = { # used for prcptot calculation
+        "mm d-1": 1.0,
+        "kg m-2 s-1": 1.0 / 86400.0
+    }
+    quantile_threshold_index_id = "q99pr"
