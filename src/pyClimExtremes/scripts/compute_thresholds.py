@@ -321,15 +321,20 @@ def compute_thresholds(
 	"""
 	start_time_checks = timeit.default_timer()
 	backend_kwargs = kwargs.get("backend_kwargs", {})
+	if not isinstance(quantiles, dict):
+		err_msg = (
+			"compute_thresholds requires dict-based quantile requests, for example "
+			"{'pr_qXXp': [95, 99]} or {'tn_qXXp': [10, 50, 90]}."
+		)
+		logger.error(err_msg, stack_info=True)
+		raise TypeError(err_msg)
 
-	index_list = resolve_indices(indices)
-	quantile_index_list = [
-		idx_class for idx_class in index_list
-		if issubclass(idx_class, QuantileIndex)
-	]
+	quantile_index_list = _resolve_quantile_requests(quantiles)
+	new_files: list[Path] = []
+	files_created_previously: list[Path] = []
 
 	if not quantile_index_list:
-		logger.warning("No quantile indices selected. Nothing to do.")
+		logger.warning("No quantile selected. Nothing to do.")
 		return [], []
 
 	required_inputs: list[str] = []
