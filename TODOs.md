@@ -1,3 +1,5 @@
+**In no particular order:**
+
 * Bootstrap quantiles
 * way more code abstraction:
     * a lot of boilerplate code that makes the code not that readable
@@ -6,8 +8,10 @@
 * more debug logging
 * look for duplicate code and pull out to utils
 * fix GSL
-* implement more indices (https://www.climdex.org/learn/indices/)
+* implement more indices
     * sector keywords
+    * https://www.climdex.org/learn/indices/    
+    * https://climate.copernicus.eu/sectoral-specific-challenges
 * document
     * document for developers
     * document usage
@@ -19,4 +23,5 @@
     * consistency with amount of comments, docstrings etc
 * Test another backend: fortran, c++
 * faster io
+* logo
 
