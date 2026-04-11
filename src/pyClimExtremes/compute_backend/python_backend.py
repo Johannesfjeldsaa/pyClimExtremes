@@ -21,6 +21,15 @@ supported_compute_frequencies = ["mon", "yr"]
 scf_str = ", ".join(supported_compute_frequencies)
 
 
+def _normalize_dates_sequence(dates: Any) -> list[Any]:
+    """Convert num2date output to a concrete sequence for downstream iteration."""
+    if isinstance(dates, np.ndarray):
+        return dates.reshape(-1).tolist()
+    if np.isscalar(dates):
+        return [dates]
+    return list(dates)
+
+
 def check_supported_compute_frequencies(
     func: Callable
 ) -> Callable:
@@ -70,7 +79,9 @@ class PythonBackend:
         if time_array is None or time_array.size == 0:
             return np.array([])
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter(
             (d.year for d in dates), dtype=int, count=len(time_array)
         )
@@ -114,7 +125,9 @@ class PythonBackend:
         if time_array is None or time_array.size == 0:
             return np.array([]), np.array([], dtype=int)
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter(
             (d.year for d in dates), dtype=int, count=len(time_array)
         )
@@ -610,7 +623,9 @@ class PythonBackend:
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter((d.year for d in dates), dtype=int, count=len(time_array))
         months = np.fromiter((d.month for d in dates), dtype=int, count=len(time_array))
 
