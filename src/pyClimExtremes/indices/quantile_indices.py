@@ -87,6 +87,78 @@ class pr_qXXpIndex(QuantileIndex):
   }
 
 
+# --- Concrete quantile threshold indices ---
+# These inherit from the template classes above, overriding only `quantile`
+# and the identifiers. They are registered so that QuantileThresholdIndex
+# subclasses (TN10p, WSDI, R95p, …) can resolve their
+# `quantile_threshold_index_id` at runtime.
+
+@register_index
+class tn_q10pIndex(tn_qXXpIndex):
+  """10th percentile of daily minimum temperature (TN10p threshold)."""
+  index_id = "tn_q10p"
+  index_aliases = ["tn_q10p", "TN_Q10P"]
+  index_long_name = "10th percentile of daily minimum temperature during the baseline period"
+  quantile = 0.1
+  backend_callable_name = "tn_q10p"
+  is_generic_template = False
+
+
+@register_index
+class tn_q90pIndex(tn_qXXpIndex):
+  """90th percentile of daily minimum temperature (TN90p threshold)."""
+  index_id = "tn_q90p"
+  index_aliases = ["tn_q90p", "TN_Q90P"]
+  index_long_name = "90th percentile of daily minimum temperature during the baseline period"
+  quantile = 0.9
+  backend_callable_name = "tn_q90p"
+  is_generic_template = False
+
+
+@register_index
+class tx_q10pIndex(tx_qXXpIndex):
+  """10th percentile of daily maximum temperature (TX10p threshold)."""
+  index_id = "tx_q10p"
+  index_aliases = ["tx_q10p", "TX_Q10P"]
+  index_long_name = "10th percentile of daily maximum temperature during the baseline period"
+  quantile = 0.1
+  backend_callable_name = "tx_q10p"
+  is_generic_template = False
+
+
+@register_index
+class tx_q90pIndex(tx_qXXpIndex):
+  """90th percentile of daily maximum temperature (TX90p threshold)."""
+  index_id = "tx_q90p"
+  index_aliases = ["tx_q90p", "TX_Q90P"]
+  index_long_name = "90th percentile of daily maximum temperature during the baseline period"
+  quantile = 0.9
+  backend_callable_name = "tx_q90p"
+  is_generic_template = False
+
+
+@register_index
+class pr_q95pIndex(pr_qXXpIndex):
+  """95th percentile of wet-day precipitation (R95p threshold)."""
+  index_id = "pr_q95p"
+  index_aliases = ["pr_q95p", "PR_Q95P"]
+  index_long_name = "95th percentile of daily precipitation during the baseline period"
+  quantile = 0.95
+  backend_callable_name = "pr_q95p"
+  is_generic_template = False
+
+
+@register_index
+class pr_q99pIndex(pr_qXXpIndex):
+  """99th percentile of wet-day precipitation (R99p threshold)."""
+  index_id = "pr_q99p"
+  index_aliases = ["pr_q99p", "PR_Q99P"]
+  index_long_name = "99th percentile of daily precipitation during the baseline period"
+  quantile = 0.99
+  backend_callable_name = "pr_q99p"
+  is_generic_template = False
+
+
 def _format_percentile_id(percentile: float) -> str:
   """Format percentiles for stable runtime index ids such as q10p or q12_5p."""
   if float(percentile).is_integer():
