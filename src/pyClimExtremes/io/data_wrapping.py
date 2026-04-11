@@ -60,6 +60,7 @@ class DataWrapper:
             } for var in self.variables
         }
         logger.debug(f"Opened DataWrapper for {self.path}")
+        self._array_cache: dict[str, np.ndarray] = {}
 
     def load_ndarray(self, varname: str):
         """Load array for variable using canonical name."""
@@ -71,6 +72,9 @@ class DataWrapper:
             )
             logger.error(err_msg)
             raise KeyError(err_msg)
+
+        if canonical_var in self._array_cache:
+            return self._array_cache[canonical_var]
 
         # IMPORTANT NOTE:
         # to allow for numba jit acceleration (issues with masked arrays),
@@ -85,7 +89,14 @@ class DataWrapper:
 
         if fill_value is not None:
             data = np.where(data == fill_value, np.nan, data)
-        return np.asarray(data, dtype=np.float32)
+        result = np.asarray(data, dtype=np.float32)
+        self._array_cache[canonical_var] = result
+        return result
+
+    def evict(self, varname: str) -> None:
+        """Remove a variable's array from the in-memory cache."""
+        canonical_var = input_var_str_normalize(varname)
+        self._array_cache.pop(canonical_var, None)
 
     def get_units(self, varname: str) -> str | None:
         """Get units for variable using canonical name."""

@@ -341,6 +341,27 @@ def compute_indices(
         filtered_index_list.append(index_class)
     index_list = filtered_index_list
 
+    # Sort so indices that share the same input variable(s) are computed
+    # consecutively. This lets us evict large arrays from memory as soon
+    # as no remaining index needs them.
+    index_list.sort(key=lambda cls: tuple(sorted(cls.required_vars)))
+
+    # Pre-compute the last position (0-based) in the sorted list at which
+    # each input variable is needed — either directly by the index or as
+    # input to an in-memory quantile-threshold computation.
+    last_needed: dict[str, int] = {}
+    for _i, _cls in enumerate(index_list):
+        for _var in _cls.required_vars:
+            last_needed[_var] = _i
+        if issubclass(_cls, QuantileThresholdIndex):
+            _tid = getattr(_cls, 'quantile_threshold_index_id', None)
+            if _tid and _tid not in quantile_threshold_files:
+                try:
+                    for _var in _resolve_quantile_index_class(_tid).required_vars:
+                        last_needed[_var] = _i
+                except Exception:
+                    pass  # conservative: don't abort sorting if resolve fails
+
     # resolve frequencies
     fq_list = resolve_frequencies(compute_fq)
 
@@ -421,7 +442,7 @@ def compute_indices(
     units_and_thresholds_elapsed_time = []
     compute_elapsed_time = []
 
-    for index_class in index_list:
+    for idx, index_class in enumerate(index_list):
         init_index_timer = timeit.default_timer()
         inited_index_class = index_class(compute_backend, **backend_kwargs)
         init_index_elapse_time.append(timeit.default_timer() - init_index_timer)
@@ -437,6 +458,13 @@ def compute_indices(
             )
             backend_sig = inspect.signature(inspect.unwrap(backend_method))
             backend_params = set(backend_sig.parameters.keys())
+
+            # Also include params accepted by the index compute() method itself
+            # (e.g. time_array/time_units/calendar consumed by
+            # QuantileThresholdIndex.compute() for DOY expansion, even when
+            # the backend method doesn't list them).
+            index_compute_sig = inspect.signature(inited_index_class.compute)
+            accepted_params = backend_params | set(index_compute_sig.parameters.keys())
 
             # Validate frequency is supported by this index
             if fq not in index_class.frequencies:
@@ -633,7 +661,7 @@ def compute_indices(
                     "lat": "lat",
                 }
                 for meta_key, kwarg_name in meta_to_kwarg.items():
-                    if kwarg_name not in backend_params:
+                    if kwarg_name not in accepted_params:
                         continue
 
                     meta_val = meta.get(meta_key)
@@ -771,6 +799,12 @@ def compute_indices(
 
             index_fq_time = timeit.default_timer() - start_time_index_fq
             index_timing_map[(index_class.index_id, fq)] = index_fq_time
+
+        # Evict input arrays that are no longer needed by any remaining index.
+        for _var, _last_pos in last_needed.items():
+            if _last_pos == idx and _var in wrappers:
+                wrappers[_var].evict(_var)
+                logger.debug("Evicted '%s' from DataWrapper cache.", _var)
 
     indices_comp_time = timeit.default_timer() - start_time_indices_comp
     total_time = timeit.default_timer() - start_time_checks
