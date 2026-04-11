@@ -73,7 +73,21 @@ class DataWrapper:
             )
             logger.error(err_msg)
             raise KeyError(err_msg)
-        return self.variables[canonical_var][:]
+
+        # IMPORTANT NOTE:
+        # to allow for numba jit acceleration (issues with masked arrays),
+        # we load the variable as a regular numpy array, even if it has
+        # missing values. This means that any masked values will be filled
+        # with the fill_value (e.g., NaN) instead of being masked.
+        # The downstream code should be able to handle these filled values.
+        var = self.variables[canonical_var][:]
+        data = var[:]
+
+        fill_value = getattr(var, "_FillValue", None)
+
+        if fill_value is not None:
+            data = np.where(data == fill_value, np.nan, data)
+        return np.asarray(data, dtype=np.float32)
 
     def get_units(self, varname: str) -> str | None:
         """Get units for variable using canonical name."""
