@@ -17,6 +17,7 @@ dependencies = [
   "netCDF4",
   "matplotlib",
   "xarray",
+  "tqdm",
 ]
 
 [project.optional-dependencies]
