@@ -2,6 +2,8 @@
 # === imports and setup ============================================== #
 # ==================================================================== #
 
+import math
+from typing import Any
 import numpy as np
 from numba import njit, cuda
 from netCDF4 import num2date
@@ -246,336 +248,358 @@ def max_spell_length_by_group(
 # === Quantile estimation ============================================ #
 # ==================================================================== #
 
-def _verify_base_period_mask(
-    data: np.ndarray,
-    base_period_mask: np.ndarray,
-    group_index: np.ndarray | None = None
-) -> np.ndarray:
-    """Validate and expand base_period_mask to per-timestep boolean mask."""
-
-    base_period_mask = np.asarray(base_period_mask, dtype=bool)
-    if base_period_mask.ndim != 1:
-        err_msg = (f"base_period_mask must be 1D, got {base_period_mask.shape}")
-        logger.error(err_msg, stack_info=True)
-        raise ValueError(err_msg)
-
-    n_time = data.shape[0]
-
-    if base_period_mask.size == n_time:
-        time_mask = base_period_mask
-    else:
-        # Per-year mask, expand to per-timestep
-        if group_index is None:
-            raise ValueError("group_index required for per-year base_period_mask")
-
-        group_index = np.asarray(group_index)
-        if group_index.shape != (n_time,):
-            err_msg = f"group_index must be (time,), got {group_index.shape}"
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        unique_groups = np.unique(group_index)
-        if base_period_mask.size != unique_groups.size:
-            err_msg = (
-                f"Mask size mismatch: mask={base_period_mask.size}, "
-                f"time={n_time}, unique_groups={unique_groups.size}"
-            )
-            logger.error(err_msg, stack_info=True)
-            raise ValueError(err_msg)
-
-        time_mask = base_period_mask[group_index.astype(int)]
-
-    return time_mask
-
 # ==================================================================== #
 # === Quantile estimation for temperature indices ==================== #
 # ==================================================================== #
 
-def _build_day_of_year_sample(
-    calendar_day: int,
-    data: np.ndarray,
-    time_array: np.ndarray,
-    time_units: str,
-    calendar: str,
-    base_years: np.ndarray | None = None,
-    exclude_year: int | None = None,
-) -> np.ndarray:
-    """Extract all values for a given calendar day across specified years.
 
-    Parameters
-    ----------
-    calendar_day : int
-        Day of year (0-364 or 0-365)
-    data : np.ndarray
-        Shape (time, lat, lon) — daily data
-    time_array : np.ndarray
-        Time coordinate values
-    time_units : str
-        Time units string
-    calendar : str
-        Calendar type
-    base_years : np.ndarray | None
-        Array of year values to include; if None, use all years
-    exclude_year : int | None
-        Year to exclude (for leave-one-out bootstrap)
-
-    Returns
-    -------
-    np.ndarray
-        Stacked values from all qualifying years for the calendar day
-    """
-    dates = num2date(time_array, units=time_units, calendar=calendar)
-    years = np.fromiter((d.year for d in dates), dtype=int, count=len(dates))
-    day_of_years = np.fromiter((d.timetuple().tm_yday - 1 for d in dates), dtype=int, count=len(dates))
-
-    # Identify indices matching both calendar day and allowed year range
-    day_match = day_of_years == calendar_day
-    if base_years is not None:
-        year_match = np.isin(years, base_years)
-    else:
-        year_match = np.ones_like(years, dtype=bool)
-
-    if exclude_year is not None:
-        year_match = year_match & (years != exclude_year)
-
-    idx = np.where(day_match & year_match)[0]
-
-    if idx.size == 0:
-        return np.array([])
-
-    return data[idx]
-
-def _compute_percentile_from_window(
-    calendar_day: int,
-    data: np.ndarray,
-    time_array: np.ndarray,
-    time_units: str,
-    calendar: str,
-    quantile: float,
-    window_size: int = 5,
-    base_years: np.ndarray | None = None,
-    exclude_year: int | None = None,
-) -> np.ndarray:
-    """Compute percentile threshold for a calendar day using rolling window.
-
-    For a given calendar day, extracts samples from a rolling window of days
-    (e.g., day ± 2 for window_size=5 centered) across all available years,
-    then computes the empirical quantile.
-
-    Parameters
-    ----------
-    calendar_day : int
-        Center day of year (0-364 or 0-365)
-    data : np.ndarray
-        Shape (time, lat, lon) — daily data
-    time_array : np.ndarray
-        Time coordinate values
-    time_units : str
-        Time units string
-    calendar : str
-        Calendar type
-    quantile : float
-        Quantile to compute (0 to 1)
-    window_size : int
-        Size of rolling window (default 5)
-    base_years : np.ndarray | None
-        Years to include
-    exclude_year : int | None
-        Year to exclude (for leave-one-out)
-
-    Returns
-    -------
-    np.ndarray
-        Shape (lat, lon) — quantile threshold per grid point
-    """
-    n_doy = 366  # Max days in year
-    half_window = window_size // 2
-
-    # Collect data from window of days
-    dates = num2date(time_array, units=time_units, calendar=calendar)
-    years = np.fromiter((d.year for d in dates), dtype=int, count=len(dates))
-    day_of_years = np.fromiter((d.timetuple().tm_yday - 1 for d in dates), dtype=int, count=len(dates))
-
-    # Build window [center - half_window, ..., center + half_window]
-    window_days = set()
-    for offset in range(-half_window, half_window + 1):
-        window_day = (calendar_day + offset) % n_doy
-        window_days.add(window_day)
-
-    day_match = np.isin(day_of_years, list(window_days))
-    if base_years is not None:
-        year_match = np.isin(years, base_years)
-    else:
-        year_match = np.ones_like(years, dtype=bool)
-
-    if exclude_year is not None:
-        year_match = year_match & (years != exclude_year)
-
-    idx = np.where(day_match & year_match)[0]
-
-    if idx.size == 0:
-        # No data in window; return NaN
-        return np.full(data.shape[1:], np.nan, dtype=data.dtype)
-
-    window_data = data[idx]  # Shape (n_samples, lat, lon)
-
-    # Compute quantile per grid point
-    return np.quantile(window_data, quantile, axis=0, method='linear')
-
-def temperature_quantiles_estimation(
-    temp_data: np.ndarray,
-    base_period_mask: np.ndarray,
-    time_array: np.ndarray,
-    time_units: str,
-    calendar: str,
-    quantile: float,
-    window_size: int = 5,
-    bootstrap_samples: int = 1000,
-    random_seed: int | None = None,
-) -> dict:
-    """Estimate daily quantile thresholds and compute yearly exceedance frequencies.
-
-    Parameters
-    ----------
-    temp_data : np.ndarray
-        Shape (time, lat, lon) — daily temperature data
-    base_period_mask : np.ndarray
-        Shape (num_years,) — boolean mask of base-period years
-    time_array : np.ndarray
-        Time coordinate
-    time_units : str
-        Time units string
-    calendar : str
-        Calendar type
-    quantile : float
-        Quantile to compute (0.1 for 10th percentile, etc.)
-    window_size : int
-        Rolling window size for threshold estimation
-    bootstrap_samples : int
-        Number of bootstrap resamples for base-period years
-    random_seed : int | None
-        Random seed for reproducibility
-
-    Returns
-    -------
-    dict
-        {'result': yearly_exceedances (shape: num_years × lat × lon),
-            'thresholds': daily_thresholds (shape: 366 × lat × lon)}
-    """
-    if random_seed is not None:
-        np.random.seed(random_seed)
-
-    dates = num2date(time_array, units=time_units, calendar=calendar)
-    years = np.asarray([d.year for d in dates], dtype=int)
-    day_of_years = np.asarray([d.timetuple().tm_yday - 1 for d in dates], dtype=int)
-
-    unique_years = np.unique(years)
-    n_years = len(unique_years)
-    year_to_idx = {int(y): i for i, y in enumerate(unique_years)}
-
-    # Validate base_period_mask
-    if base_period_mask.size != n_years:
+def _normalize_quantiles(
+    quantile: float | list[float] | tuple[float, ...] | np.ndarray,
+) -> tuple[np.ndarray, bool]:
+    """Normalize scalar or vector quantiles to a 1D float array."""
+    quantiles = np.atleast_1d(np.asarray(quantile, dtype=np.float64))
+    if quantiles.ndim != 1:
         err_msg = (
-            f"base_period_mask size ({base_period_mask.size}) does not match "
-            f"number of years in data ({n_years})"
+            "quantile must be a scalar or 1D sequence, "
+            f"got shape {quantiles.shape}"
         )
         logger.error(err_msg, stack_info=True)
         raise ValueError(err_msg)
 
-    base_years = unique_years[base_period_mask.astype(bool)]
+    if np.any((quantiles <= 0.0) | (quantiles >= 1.0)):
+        err_msg = f"quantile values must be strictly between 0 and 1, got {quantiles}"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
 
-    # --- Step 1: Compute daily thresholds from base period ---
-    n_doy = 366  # Handle leap years
-    thresholds_by_doy = np.full((n_doy,) + temp_data.shape[1:], np.nan, dtype=temp_data.dtype)
+    return quantiles, np.isscalar(quantile)
 
-    for doy in range(n_doy):
-        thresholds_by_doy[doy] = _compute_percentile_from_window(
-            doy, temp_data, time_array, time_units, calendar,
-            quantile, window_size, base_years, exclude_year=None
+
+def _format_quantile_label(quantiles: np.ndarray) -> str:
+    """Format one or more quantiles for progress/debug messages."""
+    return ", ".join(f"{q * 100:g}" for q in quantiles)
+
+
+def _verify_base_period_mask(
+    data: np.ndarray,
+    base_period_mask: np.ndarray,
+    group_index: np.ndarray | None = None,
+) -> np.ndarray:
+    """Validate and expand a base-period mask to the time axis."""
+    base_period_mask = np.asarray(base_period_mask, dtype=bool)
+    if base_period_mask.ndim != 1:
+        err_msg = f"base_period_mask must be 1D, got {base_period_mask.shape}"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
+    n_time = data.shape[0]
+    if base_period_mask.size == n_time:
+        return base_period_mask
+
+    if group_index is None:
+        err_msg = "group_index required for per-year base_period_mask"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
+    group_index = np.asarray(group_index)
+    if group_index.shape != (n_time,):
+        err_msg = f"group_index must be (time,), got {group_index.shape}"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+
+    unique_groups = np.unique(group_index)
+    if base_period_mask.size != unique_groups.size:
+        err_msg = (
+            f"Mask size mismatch: mask={base_period_mask.size}, "
+            f"time={n_time}, unique_groups={unique_groups.size}"
         )
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
 
-    # --- Step 2: Compute yearly exceedance frequencies ---
-    exceedance_rates = np.full((n_years,) + temp_data.shape[1:], np.nan, dtype=np.float32)
+    return base_period_mask[group_index.astype(int)]
 
-    for i, year in enumerate(unique_years):
-        year_idx = np.where(years == year)[0]
-        year_doys = day_of_years[year_idx]
-        year_data = temp_data[year_idx]
+def _get_day_of_year_array(
+    time_array: np.ndarray,
+    time_units: str,
+    calendar: str,
+) -> np.ndarray:
+    """Convert CF-style times to a 1D day-of-year integer array."""
+    dates_raw = num2date(time_array, units=time_units, calendar=calendar)
+    if isinstance(dates_raw, np.ndarray):
+        dates_iter = dates_raw.flat
+    else:
+        dates_iter = [dates_raw]
+    return np.array(
+        [getattr(getattr(d, "timetuple")(), "tm_yday") for d in dates_iter],
+        dtype=np.int32,
+    )
 
-        is_base_year = base_period_mask[i]
 
-        if not is_base_year:
-            # For years outside base period: use fixed thresholds
-            exceed_count = 0
-            valid_count = 0
+def _get_days_per_year(calendar: str, doy: np.ndarray) -> int:
+    """Infer the working day-of-year size from calendar metadata."""
+    if calendar in [
+        "gregorian", "proleptic_gregorian", "standard", "julian", "all_leap"
+    ]:
+        has_leap = np.any(doy == 366)
+        return 366 if has_leap else 365
+    return 365
 
-            for t, doy in enumerate(year_doys):
-                doy_threshold = thresholds_by_doy[doy]
-                temp_val = year_data[t]
 
-                valid_mask = ~np.isnan(temp_val) & ~np.isnan(doy_threshold)
-                valid_count += np.sum(valid_mask)
+def _prepare_temperature_quantile_inputs(
+    temp_data: np.ndarray,
+    quantile: float | list[float] | tuple[float, ...] | np.ndarray,
+    base_period_mask: np.ndarray,
+    group_index: np.ndarray,
+    time_array: np.ndarray,
+    time_units: str,
+    calendar: str,
+    window_size: int,
+) -> tuple[np.ndarray, bool, np.ndarray, np.ndarray, int, int, int]:
+    """Validate inputs and extract base-period arrays for the njit kernel."""
+    if temp_data.ndim != 3:
+        err_msg = f"Expected temp_data with shape (time, lat, lon), got {temp_data.shape}"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
+    if window_size % 2 == 0:
+        err_msg = f"window_size must be odd, got {window_size}"
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
 
-                # For lower-tail quantiles (e.g., 10th percentile), use <
-                # For upper-tail quantiles (e.g., 90th percentile), use >
-                if quantile <= 0.5:
-                    exceed_mask = temp_val < doy_threshold
-                else:
-                    exceed_mask = temp_val > doy_threshold
+    quantiles, is_scalar = _normalize_quantiles(quantile)
+    _, n_lat, n_lon = temp_data.shape
 
-                exceed_count += np.sum(exceed_mask & valid_mask)
+    daily_mask = _verify_base_period_mask(temp_data, base_period_mask, group_index)
+    doy = _get_day_of_year_array(time_array, time_units, calendar)
+    days_per_year = _get_days_per_year(calendar, doy)
 
-            exceedance_rates[i] = np.where(
-                valid_count > 0,
-                exceed_count / valid_count,
-                np.nan
-            )
-        else:
-            # For years in base period: bootstrap resampling
-            boot_rates = []
+    base_time_idx = np.where(daily_mask)[0]
+    if base_time_idx.size == 0:
+        err_msg = "No data available in base period after applying mask."
+        logger.error(err_msg, stack_info=True)
+        raise ValueError(err_msg)
 
-            for b in range(bootstrap_samples):
-                # Build leave-one-year-out sample and bootstrap-resample
-                exceed_count_b = 0
-                valid_count_b = 0
+    base_data = np.ascontiguousarray(temp_data[base_time_idx], dtype=np.float64)
+    base_doy = np.ascontiguousarray(doy[base_time_idx], dtype=np.int32)
+    return quantiles, is_scalar, base_data, base_doy, days_per_year, n_lat, n_lon
 
-                for t, doy in enumerate(year_doys):
-                    # Compute threshold from bootstrap sample of leave-one-year-out base
-                    boot_threshold = _compute_percentile_from_window(
-                        doy, temp_data, time_array, time_units, calendar,
-                        quantile, window_size, base_years, exclude_year=int(year)
-                    )
 
-                    # Don't bootstrap resample if computing from full base - just apply threshold
-                    # This implements the leave-one-year-out thresholds directly
-                    temp_val = year_data[t]
+@njit(cache=True, fastmath={"contract": True},)
+def _temperature_quantiles_loop_cpu(
+    base_data: np.ndarray,
+    base_doy: np.ndarray,
+    quantiles: np.ndarray,
+    window_size: int,
+    days_per_year: int,
+    n_lat: int,
+    n_lon: int,
+) -> np.ndarray:
+    """njit DOY-loop kernel for temperature quantile thresholds."""
+    half_win = window_size // 2
+    n_quantiles = quantiles.shape[0]
+    n_base = base_data.shape[0]
+    thresholds = np.full((n_quantiles, days_per_year, n_lat, n_lon), np.nan)
 
-                    valid_mask = ~np.isnan(temp_val) & ~np.isnan(boot_threshold)
-                    valid_count_b += np.sum(valid_mask)
+    for target_doy in range(1, days_per_year + 1):
+        # collect indices whose DOY falls in the circular window
+        count = 0
+        for t in range(n_base):
+            d = base_doy[t]
+            delta = (d - target_doy + days_per_year) % days_per_year
+            if delta <= half_win or delta >= days_per_year - half_win:
+                count += 1
 
-                    if quantile <= 0.5:
-                        exceed_mask = temp_val < boot_threshold
+        if count == 0:
+            continue
+
+        window_data = np.empty((count, n_lat, n_lon))
+        idx = 0
+        for t in range(n_base):
+            d = base_doy[t]
+            delta = (d - target_doy + days_per_year) % days_per_year
+            if delta <= half_win or delta >= days_per_year - half_win:
+                window_data[idx] = base_data[t]
+                idx += 1
+
+        # sort each grid point and apply Hyndman-Fan type 8
+        for i in range(n_lat):
+            for j in range(n_lon):
+                col = window_data[:, i, j].copy()
+                col.sort()
+                n = col.shape[0]
+                for q_idx in range(n_quantiles):
+                    q = quantiles[q_idx]
+                    h = (n + 1.0 / 3.0) * q + 1.0 / 3.0
+                    if h <= 1.0:
+                        thresholds[q_idx, target_doy - 1, i, j] = col[0]
+                    elif h >= n:
+                        thresholds[q_idx, target_doy - 1, i, j] = col[n - 1]
                     else:
-                        exceed_mask = temp_val > boot_threshold
+                        lo = int(np.floor(h)) - 1
+                        frac = h - np.floor(h)
+                        thresholds[q_idx, target_doy - 1, i, j] = (
+                            col[lo] + frac * (col[lo + 1] - col[lo])
+                        )
 
-                    exceed_count_b += np.sum(exceed_mask & valid_mask)
+    return thresholds
 
-                boot_rate = np.where(
-                    valid_count_b > 0,
-                    exceed_count_b / valid_count_b,
-                    np.nan
+
+@cuda.jit
+def _temperature_quantiles_loop_gpu_kernel(
+    base_data,
+    base_doy,
+    quantiles,
+    half_win,
+    days_per_year,
+    thresholds,
+):
+    """CUDA kernel: one thread per (lat, lon) point, loops over all DOYs."""
+    flat_ij = cuda.grid(1)
+    n_lat = thresholds.shape[2]
+    n_lon = thresholds.shape[3]
+    if flat_ij >= n_lat * n_lon:
+        return
+
+    i = flat_ij // n_lon
+    j = flat_ij % n_lon
+    n_base = base_data.shape[0]
+    n_quantiles = quantiles.shape[0]
+
+    col: Any = cuda.local.array(1024, np.float64)  # type: ignore[arg-type]  # max practical window count
+
+    for target_doy in range(1, days_per_year + 1):
+        count = 0
+        for t in range(n_base):
+            d = base_doy[t]
+            delta = (d - target_doy + days_per_year) % days_per_year
+            if delta <= half_win or delta >= days_per_year - half_win:
+                col[count] = base_data[t, i, j]
+                count += 1
+
+        if count == 0:
+            continue
+
+        # insertion sort
+        for s in range(1, count):
+            key = col[s]
+            k = s - 1
+            while k >= 0 and col[k] > key:
+                col[k + 1] = col[k]
+                k -= 1
+            col[k + 1] = key
+
+        # Hyndman-Fan type 8
+        for q_idx in range(n_quantiles):
+            q = quantiles[q_idx]
+            h = (count + 1.0 / 3.0) * q + 1.0 / 3.0
+            if h <= 1.0:
+                thresholds[q_idx, target_doy - 1, i, j] = col[0]
+            elif h >= count:
+                thresholds[q_idx, target_doy - 1, i, j] = col[count - 1]
+            else:
+                lo = int(math.floor(h)) - 1
+                frac = h - math.floor(h)
+                thresholds[q_idx, target_doy - 1, i, j] = (
+                    col[lo] + frac * (col[lo + 1] - col[lo])
                 )
-                boot_rates.append(boot_rate)
 
-            # Average across bootstrap repetitions
-            boot_rates_arr = np.asarray(boot_rates)
-            exceedance_rates[i] = np.nanmean(boot_rates_arr, axis=0)
 
-    return {
-        'result': exceedance_rates,
-        'thresholds': thresholds_by_doy
-    }
+def _temperature_quantiles_loop_gpu(
+    base_data: np.ndarray,
+    base_doy: np.ndarray,
+    quantiles: np.ndarray,
+    window_size: int,
+    days_per_year: int,
+    n_lat: int,
+    n_lon: int,
+) -> np.ndarray:
+    """GPU wrapper: transfers data, launches kernel, returns result on host."""
+    half_win = window_size // 2
+    n_quantiles = quantiles.shape[0]
+    thresholds_host = np.full(
+        (n_quantiles, days_per_year, n_lat, n_lon), np.nan, dtype=np.float64
+    )
+    d_base_data = cuda.to_device(base_data)
+    d_base_doy = cuda.to_device(base_doy)
+    d_quantiles = cuda.to_device(quantiles)
+    d_thresholds = cuda.to_device(thresholds_host)
 
+    n_spatial = n_lat * n_lon
+    threads_per_block = 64
+    blocks_per_grid = (n_spatial + threads_per_block - 1) // threads_per_block
+    _temperature_quantiles_loop_gpu_kernel[blocks_per_grid, threads_per_block](  # type: ignore[index]
+        d_base_data, d_base_doy, d_quantiles, half_win, days_per_year, d_thresholds
+    )
+    return d_thresholds.copy_to_host()
+
+
+def temperature_quantiles_estimation(
+    temp_data: np.ndarray,
+    quantile: float | list[float] | tuple[float, ...] | np.ndarray,
+    base_period_mask: np.ndarray,
+    group_index: np.ndarray,
+    time_array: np.ndarray,
+    time_units: str,
+    calendar: str,
+    window_size: int = 5,
+    bootstrap_samples: int | None = None,
+    random_seed: int | None = None,
+    use_cuda: bool = False,
+) -> np.ndarray:
+    """Compute day-of-year dependent temperature quantile thresholds.
+
+    Parameters
+    ----------
+    temp_data : np.ndarray
+        Daily temperature data, shape (time, lat, lon).
+    quantile : float or sequence of float
+        Quantile level(s) strictly between 0 and 1.
+    base_period_mask : np.ndarray
+        Boolean mask for base period (per-timestep or per-year).
+    group_index : np.ndarray
+        Integer array mapping time steps to year groups.
+    time_array : np.ndarray
+        CF-convention time coordinate values.
+    time_units : str
+        CF-convention time units string.
+    calendar : str
+        Calendar type.
+    window_size : int, optional
+        Size of day-of-year window (must be odd). Default 5.
+    bootstrap_samples : int | None, optional
+        Reserved for future bootstrap implementations.
+    random_seed : int | None, optional
+        Reserved for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Float64 array of shape (days_per_year, lat, lon) or
+        (n_quantiles, days_per_year, lat, lon) for vector quantile input.
+    """
+    quantiles, is_scalar, base_data, base_doy, days_per_year, n_lat, n_lon = (
+        _prepare_temperature_quantile_inputs(
+            temp_data=temp_data,
+            quantile=quantile,
+            base_period_mask=base_period_mask,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            window_size=window_size,
+        )
+    )
+    logger.debug(
+        "Computing temperature quantiles [%s] over %d base timesteps, %d DOYs",
+        _format_quantile_label(quantiles), base_data.shape[0], days_per_year,
+    )
+    if use_cuda:
+        thresholds = _temperature_quantiles_loop_gpu(
+            base_data, base_doy, quantiles, window_size, days_per_year, n_lat, n_lon
+        )
+    else:
+        thresholds = _temperature_quantiles_loop_cpu(
+            base_data, base_doy, quantiles, window_size, days_per_year, n_lat, n_lon
+        )
+    return thresholds[0] if is_scalar else thresholds
 
 # ==================================================================== #
 # === Quantile estimation for precipitation indices ================== #
@@ -583,21 +607,21 @@ def temperature_quantiles_estimation(
 
 def precipitation_quantiles_estimation(
     pr_data: np.ndarray,
-    quantile: float,
+    quantile: float | list[float] | tuple[float, ...] | np.ndarray,
     base_period_mask: np.ndarray,
     group_index: np.ndarray,
     wet_day_threshold: float,
 ) -> np.ndarray:
     """
     Compute precipitation quantile threshold per grid point.
-    Uses quantile type 8 (alphap=0.375, betap=0.375) as used
-    by climdex.pcic.
+    Uses Hyndman-Fan type 8 quantile (alphap=0.375, betap=0.375) as
+    used by climdex.pcic.
 
     Parameters
     ----------
     pr_data : np.ndarray
         Daily precipitation data with shape (time, lat, lon).
-    quantile : float
+    quantile : float | list[float] | tuple[float, ...] | np.ndarray
         Quantile level between 0 and 1.
     base_period_mask : np.ndarray
         1D boolean array indicating which time steps belong to
@@ -621,46 +645,27 @@ def precipitation_quantiles_estimation(
     Returns
     -------
     np.ndarray
-        2D array (lat, lon) of the computed quantile threshold.
+        Float64 array with shape (lat, lon) containing the computed
+        quantile threshold.
     """
     if pr_data.ndim != 3:
-        raise ValueError(
-            f"Expected shape (time, lat, lon), got {pr_data.shape}"
-        )
+        raise ValueError(f"Expected shape (time, lat, lon), got {pr_data.shape}")
 
-    time_mask = _verify_base_period_mask(
-        pr_data, base_period_mask, group_index
-    )
+    quantiles, is_scalar = _normalize_quantiles(quantile)
+    time_mask = _verify_base_period_mask(pr_data, base_period_mask, group_index)
+    baseline_data = pr_data[time_mask]
 
-    baseline_data = pr_data[time_mask, ...]
     if baseline_data.size == 0:
-        warn_msg = "No data in baseline period after applying mask; returning NaN"
-        logger.warning(warn_msg, stack_info=True)
-        return np.full(pr_data.shape[1:], np.nan, dtype=pr_data.dtype)
+        logger.warning("No data in baseline period after applying mask; returning NaN")
+        return np.full(pr_data.shape[1:], np.nan, dtype=np.float64)
 
-    is_wet = (~np.isnan(baseline_data)) & (baseline_data >= wet_day_threshold)
-    wet_day_data = np.where(is_wet, baseline_data, np.nan)
-
-    if np.isnan(wet_day_data).all():
-        warn_msg = "No wet days in baseline period; returning NaN"
-        logger.warning(warn_msg, stack_info=True)
-        return np.full(pr_data.shape[1:], np.nan, dtype=pr_data.dtype)
-
-    n_time_base, n_lat, n_lon = wet_day_data.shape
-    wet_day_flat = wet_day_data.reshape(n_time_base, -1)  # (time, lat*lon)
-
-    # Support single or multiple quantiles
-    if not isinstance(quantile, float):
-        quantile = float(quantile)
-
+    wet_day_data = np.where(
+        (~np.isnan(baseline_data)) & (baseline_data >= wet_day_threshold),
+        baseline_data,
+        np.nan,
+    )
     # NumPy's 'median_unbiased' method matches Hyndman-Fan type 8,
     # which is the same quantile convention used by climdex here:
     # https://numpy.org/doc/2.0/reference/generated/numpy.quantile.html
-    percentile_values = np.nanquantile(
-        wet_day_flat,
-        quantile,
-        axis=0,
-        method="median_unbiased",
-    )
-
-    return percentile_values.reshape(n_lat, n_lon)
+    result = np.nanquantile(wet_day_data, quantiles, axis=0, method="median_unbiased")
+    return result[0] if is_scalar else result

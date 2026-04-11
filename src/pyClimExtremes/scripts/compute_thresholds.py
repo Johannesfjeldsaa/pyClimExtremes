@@ -8,7 +8,11 @@ from netCDF4 import Dataset, num2date
 from pyClimExtremes.indices.base_index import QuantileIndex
 from pyClimExtremes.indices.quantile_indices import build_runtime_quantile_class
 from pyClimExtremes.indices.units_utils import validate_input_units
-from pyClimExtremes.io.data_wrapping import prepare_inputs_and_meta, prepare_time_groupings
+from pyClimExtremes.io.data_wrapping import (
+	DataWrapper,
+	prepare_inputs_and_meta,
+	prepare_time_groupings,
+)
 from pyClimExtremes.io.save_utils import check_filepath
 from pyClimExtremes.logging.setup_logging import get_logger
 
@@ -61,6 +65,20 @@ def _build_threshold_filename(index_class: type, meta: dict[str, Any]) -> str:
 		f"{source_id}_{experiment_id}_{variant_label}_"
 		f"{baseline_period[0]}-{baseline_period[1]}.nc"
 	)
+
+
+def _select_metadata_input_path(
+	input_args: Mapping[str, Path | None],
+) -> Path:
+	"""Choose one available input file for metadata extraction."""
+	for key in ("tasmax", "tasmin", "pr"):
+		path = input_args.get(key)
+		if path is not None:
+			return Path(path)
+
+	err_msg = "At least one input file must be provided to compute thresholds."
+	logger.error(err_msg, stack_info=True)
+	raise ValueError(err_msg)
 
 
 def _write_threshold_netcdf(
@@ -160,8 +178,12 @@ def _build_base_period_mask(
 	baseline_period: tuple[int, int],
 ) -> np.ndarray:
 	"""Build per-year boolean mask for baseline period selection."""
-	dates = num2date(time_array, units=time_units, calendar=calendar)
-	years = np.asarray([d.year for d in dates], dtype=int)
+	dates_raw = num2date(time_array, units=time_units, calendar=calendar)
+	if isinstance(dates_raw, np.ndarray):
+		dates_iter = dates_raw.flat
+	else:
+		dates_iter = [dates_raw]
+	years = np.asarray([getattr(d, "year") for d in dates_iter], dtype=int)
 	unique_years = np.unique(years)
 
 	start_year, end_year = baseline_period
@@ -177,7 +199,6 @@ def _build_base_period_mask(
 		raise ValueError(err_msg)
 
 	return mask
-
 
 def compute_threshold_array(
 	*,
@@ -232,9 +253,10 @@ def compute_threshold_array(
 		if random_seed is not None:
 			compute_kwargs["random_seed"] = random_seed
 
-		index_obj.compute(**compute_kwargs)
-		threshold_array = index_obj.thresholds_by_doy
-	elif index_class.index_type == "precipitation":
+		threshold_array = index_obj.compute(**compute_kwargs)
+		if index_obj.thresholds_by_doy is not None:
+			threshold_array = index_obj.thresholds_by_doy
+	elif index_class.index_type == "precipitation_quantile":
 		wet_day_threshold = index_class.get_wet_day_threshold(units["pr"])
 		if wet_day_threshold is None or isinstance(wet_day_threshold, dict):
 			err_msg = (
@@ -271,8 +293,74 @@ def compute_threshold_array(
 	return np.asarray(threshold_array)
 
 
+def _build_precipitation_batch_key(
+	index_class: type[QuantileIndex],
+	units: Mapping[str, str],
+) -> tuple[tuple[str, ...], tuple[int, int], float]:
+	"""Build a batch key for precipitation quantiles that can share one compute call."""
+	wet_day_threshold = index_class.get_wet_day_threshold(units["pr"])
+	if wet_day_threshold is None or isinstance(wet_day_threshold, dict):
+		err_msg = (
+			"Precipitation quantile threshold computation requires a "
+			f"wet_day_threshold for index '{index_class.index_id}'."
+		)
+		logger.error(err_msg, stack_info=True)
+		raise ValueError(err_msg)
+
+	return (
+		tuple(index_class.required_vars),
+		getattr(index_class, "baseline_period", (1981, 2010)),
+		float(wet_day_threshold),
+	)
+
+
+def _compute_precipitation_threshold_batch(
+	*,
+	batch_items: list[tuple[type[QuantileIndex], Path]],
+	compute_backend: str,
+	backend_kwargs: Mapping[str, Any],
+	arrays_cache: Mapping[str, np.ndarray],
+	units_cache: Mapping[str, str],
+	meta: dict[str, Any],
+	time_groupings: dict[str, dict[str, np.ndarray]],
+) -> dict[str, np.ndarray]:
+	"""Compute multiple precipitation quantiles in one backend call."""
+	if not batch_items:
+		return {}
+
+	index_classes = [index_class for index_class, _ in batch_items]
+	reference_index = index_classes[0](compute_backend, **dict(backend_kwargs))
+	pr_units = units_cache["pr"]
+	batch_key = _build_precipitation_batch_key(index_classes[0], {"pr": pr_units})
+	_, baseline_period, wet_day_threshold = batch_key
+	base_period_mask = _build_base_period_mask(
+		time_array=meta["time"],
+		time_units=meta["time_units"],
+		calendar=meta["calendar"],
+		baseline_period=baseline_period,
+	)
+	quantiles = np.asarray([index_class.quantile for index_class in index_classes], dtype=np.float64)
+	backend_method = getattr(reference_index.compute_backend, "pr_qXXp")
+	threshold_array = backend_method(
+		compute_fq="yr",
+		pr_data=arrays_cache["pr"],
+		group_index=time_groupings["yr"]["group_index"],
+		quantile=quantiles,
+		base_period_mask=base_period_mask,
+		wet_day_threshold=wet_day_threshold,
+	)
+	threshold_array = np.asarray(threshold_array)
+	if threshold_array.ndim == 2:
+		threshold_array = threshold_array[np.newaxis, ...]
+
+	return {
+		index_class.index_id: np.asarray(threshold_array[idx])
+		for idx, index_class in enumerate(index_classes)
+	}
+
+
 def compute_thresholds(
-	indices: str | list[str],
+	quantiles: dict[str, float | int | list[float] | tuple[float, ...]],
 	compute_backend: str,
 	output_dir: Path,
 	tasmax: Path | None = None,
@@ -286,22 +374,24 @@ def compute_thresholds(
 ) -> tuple[list[Path], list[Path]]:
 	"""Compute and write threshold arrays for quantile-based indices.
 
-	Supported indices are subclasses of QuantileIndex. For temperature quantile
-	indices, this computes daily thresholds (day_of_year, lat, lon) using the
-	index baseline period and stores them in NetCDF. For precipitation quantile
-	indices (e.g., R95p/R99p), this computes a per-grid-point threshold
-	(lat, lon).
+	Supported quantiles are subclasses of QuantileIndex. For temperature quantiles
+	this computes daily thresholds (day_of_year, lat, lon) using the
+	index baseline period and stores them in NetCDF. For precipitation quantiles
+ 	this computes a per-grid-point threshold (lat, lon).
 
 	Parameters
 	----------
-	indices : str | list[str]
-		Requested indices or index groups (e.g., 'all', 'temperature').
+	quantiles : dict[str, float | int | list[float] | tuple[float, ...]]
+		Requested quantiles must be provided as a dict whose keys are generic
+		quantile families such as 'tn_qXXp', 'tx_qXXp', or 'pr_qXXp', and whose
+		values are one or more percentile values, e.g.
+		{'tn_qXXp': [10, 50, 90], 'pr_qXXp': [95, 99]}.
 	compute_backend : str
 		Compute backend name. Currently expected: 'python'.
 	output_dir : Path
 		Directory where threshold NetCDF files are saved.
 	tasmax, tasmin, pr : Path | None
-		Input files used by the selected indices.
+		Input files used by the selected quantile(s).
 	overwrite : bool, optional
 		Whether existing output files should be overwritten.
 	window_size : int, optional
@@ -337,16 +427,67 @@ def compute_thresholds(
 		logger.warning("No quantile selected. Nothing to do.")
 		return [], []
 
-	required_inputs: list[str] = []
-	for idx_class in quantile_index_list:
-		required_inputs.extend(idx_class.required_vars)
-	required_inputs = sorted(list(set(required_inputs)))
-
 	input_args = {
 		"tasmax": tasmax,
 		"tasmin": tasmin,
 		"pr": pr,
 	}
+	metadata_path = _select_metadata_input_path(input_args)
+	metadata_wrapper = DataWrapper(metadata_path)
+	try:
+		_, meta = prepare_inputs_and_meta(wrappers={"meta": metadata_wrapper})
+		time_groupings = prepare_time_groupings(
+			fq_list=["yr"],
+			compute_backend=compute_backend,
+			metadata=meta,
+		)
+	except Exception:
+		metadata_wrapper.close()
+		raise
+
+	output_dir = Path(output_dir)
+	output_dir.mkdir(parents=True, exist_ok=True)
+	pending_outputs: list[tuple[type[QuantileIndex], Path]] = []
+	try:
+		for index_class in quantile_index_list:
+			output_filename = _build_threshold_filename(index_class, meta)
+			output_path = output_dir.joinpath(output_filename)
+			if not check_filepath(output_path, overwrite):
+				files_created_previously.append(output_path)
+				continue
+			pending_outputs.append((index_class, output_path))
+	finally:
+		metadata_wrapper.close()
+
+	if not pending_outputs:
+		checks_time = timeit.default_timer() - start_time_checks
+		thresholds_comp_time = 0.0
+		total_time = timeit.default_timer() - start_time_checks
+		timing_summary = (
+			f"Time taken for input checks and loading: {checks_time:.2f} secs.\n"
+			f"Time taken for threshold computations: {thresholds_comp_time:.2f} secs.\n"
+			" - Average get_arrays time: 0.00 secs.\n"
+			" - Average get_units time: 0.00 secs.\n"
+			" - Average compute time: 0.00 secs.\n"
+			" - Average write time: 0.00 secs.\n"
+			f"Total time taken: {total_time:.2f} secs.\n"
+			"Detailed timing per quantile:\n"
+		)
+		logger.info(
+			"Threshold computation completed. Total quantiles requested: %d with timing details:\n%sNo new files created.%s",
+			len(quantile_index_list),
+			timing_summary,
+			(
+				f"Files skipped (already existed): {len(files_created_previously)}."
+				if files_created_previously else ""
+			),
+		)
+		return new_files, files_created_previously
+
+	required_inputs: list[str] = []
+	for idx_class, _ in pending_outputs:
+		required_inputs.extend(idx_class.required_vars)
+	required_inputs = sorted(list(set(required_inputs)))
 
 	input_files_to_use: dict[str, Path] = {}
 	for var in required_inputs:
@@ -354,81 +495,139 @@ def compute_thresholds(
 		if path is None:
 			err_msg = (
 				f"Input variable '{var}' is required for selected quantile "
-				"indices but no file was provided."
+				"but no file was provided."
 			)
 			logger.error(err_msg, stack_info=True)
 			raise ValueError(err_msg)
 		input_files_to_use[var] = Path(path)
 
-	wrappers, meta = prepare_inputs_and_meta(**input_files_to_use)
-	time_groupings = prepare_time_groupings(
-		fq_list=["yr"],
-		compute_backend=compute_backend,
-		metadata=meta,
-	)
+	wrappers: dict[str, DataWrapper] = {
+		var: DataWrapper(path)
+		for var, path in input_files_to_use.items()
+	}
+	checks_time = timeit.default_timer() - start_time_checks
 
-	output_dir = Path(output_dir)
-	output_dir.mkdir(parents=True, exist_ok=True)
-
-	new_files: list[Path] = []
-	files_created_previously: list[Path] = []
+	threshold_timing_map: dict[str, float] = {}
+	get_arrays_elapsed_time: list[float] = []
+	get_units_elapsed_time: list[float] = []
+	compute_elapsed_time: list[float] = []
+	write_elapsed_time: list[float] = []
+	arrays_cache: dict[str, np.ndarray] = {}
+	units_cache: dict[str, str] = {}
+	thresholds_comp_time = 0.0
 
 	try:
-		for index_class in quantile_index_list:
-			index_obj = index_class(compute_backend, **backend_kwargs)
+		for var in required_inputs:
+			get_arrays_timer = timeit.default_timer()
 
-			arrays = {
-				var: wrappers[var].load_ndarray(var)
-				for var in index_class.required_vars
-			}
-			units = {
-				var: wrappers[var].get_units(var)
-				for var in index_class.required_vars
-			}
+			arrays_cache[var] = wrappers[var].load_ndarray(var)
+			get_arrays_elapsed_time.append(timeit.default_timer() - get_arrays_timer)
 
-			for var, unit in units.items():
-				if unit is None:
-					err_msg = (
-						f"Input variable '{var}' is missing units for "
-						f"index '{index_class.index_id}'."
-					)
-					logger.error(err_msg, stack_info=True)
-					raise ValueError(err_msg)
-				if not validate_input_units(var, unit):
-					err_msg = (
-						f"Invalid input units '{unit}' for variable '{var}' "
-						f"used by index '{index_class.index_id}'."
-					)
-					logger.error(err_msg, stack_info=True)
-					raise ValueError(err_msg)
+			get_units_timer = timeit.default_timer()
+			unit = wrappers[var].get_units(var)
+			get_units_elapsed_time.append(timeit.default_timer() - get_units_timer)
+			if unit is None:
+				err_msg = f"Input variable '{var}' is missing units."
+				logger.error(err_msg, stack_info=True)
+				raise ValueError(err_msg)
+			if not validate_input_units(var, unit):
+				err_msg = f"Invalid input units '{unit}' for variable '{var}'."
+				logger.error(err_msg, stack_info=True)
+				raise ValueError(err_msg)
+			units_cache[var] = unit
 
-			logger.info("Computing thresholds for %s", index_class.index_id)
-			threshold_array = compute_threshold_array(
-				index_class=index_class,
-				index_obj=index_obj,
-				arrays=arrays,
-				units=units,
-				meta=meta,
-				time_groupings=time_groupings,
-				window_size=window_size,
-				bootstrap_samples=bootstrap_samples,
-				random_seed=random_seed,
-			)
-
-			output_filename = _build_threshold_filename(index_class, meta)
-			output_path = output_dir.joinpath(output_filename)
-
-			if not check_filepath(output_path, overwrite):
-				files_created_previously.append(output_path)
+		precipitation_batches: dict[
+			tuple[tuple[str, ...], tuple[int, int], float],
+			list[tuple[type[QuantileIndex], Path]],
+		] = {}
+		work_items: list[tuple[str, Any]] = []
+		for item in pending_outputs:
+			index_class, _ = item
+			if index_class.index_type != "precipitation_quantile":
+				work_items.append(("single", item))
 				continue
 
-			_write_threshold_netcdf(
-				threshold_array=np.asarray(threshold_array),
-				index_class=index_class,
-				output_path=output_path,
-				metadata=meta,
+			batch_key = _build_precipitation_batch_key(index_class, {"pr": units_cache["pr"]})
+			if batch_key not in precipitation_batches:
+				precipitation_batches[batch_key] = []
+				work_items.append(("precipitation_batch", batch_key))
+			precipitation_batches[batch_key].append(item)
+
+		start_time_thresholds_comp = timeit.default_timer()
+		for work_type, work_item in work_items:
+			if work_type == "single":
+				index_class, output_path = work_item
+				index_obj = index_class(compute_backend, **backend_kwargs)
+				arrays = {
+					var: arrays_cache[var]
+					for var in index_class.required_vars
+				}
+				units = {
+					var: units_cache[var]
+					for var in index_class.required_vars
+				}
+
+				logger.info("Computing thresholds for %s", index_class.index_id)
+
+				compute_timer = timeit.default_timer()
+				threshold_array = compute_threshold_array(
+					index_class=index_class,
+					index_obj=index_obj,
+					arrays=arrays,
+					units=units,
+					meta=meta,
+					time_groupings=time_groupings,
+					window_size=window_size,
+					bootstrap_samples=bootstrap_samples,
+					random_seed=random_seed,
+				)
+				compute_time = timeit.default_timer() - compute_timer
+				compute_elapsed_time.append(compute_time)
+
+				write_timer = timeit.default_timer()
+				_write_threshold_netcdf(
+					threshold_array=np.asarray(threshold_array),
+					index_class=index_class,
+					output_path=output_path,
+					metadata=meta,
+				)
+				write_time = timeit.default_timer() - write_timer
+				write_elapsed_time.append(write_time)
+				threshold_timing_map[index_class.index_id] = compute_time + write_time
+				new_files.append(output_path)
+				continue
+
+			batch_key = work_item
+			batch_items = precipitation_batches[batch_key]
+			for index_class, _ in batch_items:
+				logger.info("Computing thresholds for %s", index_class.index_id)
+
+			compute_timer = timeit.default_timer()
+			batch_thresholds = _compute_precipitation_threshold_batch(
+				batch_items=batch_items,
+				compute_backend=compute_backend,
+				backend_kwargs=backend_kwargs,
+				arrays_cache=arrays_cache,
+				units_cache=units_cache,
+				meta=meta,
+				time_groupings=time_groupings,
 			)
-			new_files.append(output_path)
+			compute_time = timeit.default_timer() - compute_timer
+			per_quantile_compute_time = compute_time / len(batch_items)
+			compute_elapsed_time.extend([per_quantile_compute_time] * len(batch_items))
+
+			for index_class, output_path in batch_items:
+				write_timer = timeit.default_timer()
+				_write_threshold_netcdf(
+					threshold_array=np.asarray(batch_thresholds[index_class.index_id]),
+					index_class=index_class,
+					output_path=output_path,
+					metadata=meta,
+				)
+				write_time = timeit.default_timer() - write_timer
+				write_elapsed_time.append(write_time)
+				threshold_timing_map[index_class.index_id] = per_quantile_compute_time + write_time
+				new_files.append(output_path)
 
 		thresholds_comp_time = timeit.default_timer() - start_time_thresholds_comp
 
