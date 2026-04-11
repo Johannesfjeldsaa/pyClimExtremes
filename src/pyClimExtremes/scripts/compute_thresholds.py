@@ -1,4 +1,5 @@
 from pathlib import Path
+import timeit
 from typing import Any, Mapping
 
 import numpy as np
@@ -318,6 +319,7 @@ def compute_thresholds(
 	tuple[list[Path], list[Path]]
 		(new_files, files_created_previously)
 	"""
+	start_time_checks = timeit.default_timer()
 	backend_kwargs = kwargs.get("backend_kwargs", {})
 
 	index_list = resolve_indices(indices)
@@ -423,13 +425,58 @@ def compute_thresholds(
 			)
 			new_files.append(output_path)
 
+		thresholds_comp_time = timeit.default_timer() - start_time_thresholds_comp
+
 	finally:
 		for wrapper in wrappers.values():
 			wrapper.close()
 
-	logger.info(
-		"Threshold computation complete. New files: %d, existing skipped: %d",
-		len(new_files),
-		len(files_created_previously),
+	total_time = timeit.default_timer() - start_time_checks
+	avg_get_arrays_time = (
+		sum(get_arrays_elapsed_time) / len(get_arrays_elapsed_time)
+		if get_arrays_elapsed_time else 0.0
 	)
+	avg_get_units_time = (
+		sum(get_units_elapsed_time) / len(get_units_elapsed_time)
+		if get_units_elapsed_time else 0.0
+	)
+	avg_compute_time = (
+		sum(compute_elapsed_time) / len(compute_elapsed_time)
+		if compute_elapsed_time else 0.0
+	)
+	avg_write_time = (
+		sum(write_elapsed_time) / len(write_elapsed_time)
+		if write_elapsed_time else 0.0
+	)
+
+	timing_summary = (
+		f"Time taken for input checks and loading: {checks_time:.2f} secs.\n"
+		f"Time taken for threshold computations: {thresholds_comp_time:.2f} secs.\n"
+		f" - Average get_arrays time: {avg_get_arrays_time:.2f} secs.\n"
+		f" - Average get_units time: {avg_get_units_time:.2f} secs.\n"
+		f" - Average compute time: {avg_compute_time:.2f} secs.\n"
+		f" - Average write time: {avg_write_time:.2f} secs.\n"
+		f"Total time taken: {total_time:.2f} secs.\n"
+		"Detailed timing per quantile:\n"
+	)
+	if threshold_timing_map:
+		for index_id, duration in threshold_timing_map.items():
+			timing_summary += (
+				f" - Quantile '{index_id}': {duration:.2f} secs.\n"
+			)
+
+	summary_msg = (
+		"Threshold computation completed. "
+		f"Total quantiles requested: {len(quantile_index_list)} with timing details:\n"
+		f"{timing_summary}"
+	)
+	summary_msg += (
+		f"New files created: {len(new_files)}." if new_files else
+		"No new files created."
+	)
+	summary_msg += (
+		f"Files skipped (already existed): {len(files_created_previously)}."
+		if files_created_previously else ""
+	)
+	logger.info(summary_msg)
 	return new_files, files_created_previously
