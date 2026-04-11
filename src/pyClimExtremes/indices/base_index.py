@@ -3,6 +3,7 @@
 from typing import Any
 import inspect
 import numpy as np
+from netCDF4 import num2date
 
 from pyClimExtremes.compute_backend import get_compute_backend
 from pyClimExtremes.indices.registry import INPUT_VAR_ALIASES
@@ -623,6 +624,7 @@ class QuantileThresholdIndex(BaseIndex):
     """
 
     quantile_threshold_index_id: str | None = None
+    threshold_is_doy_dependent: bool = False
 
     def compute(
         self,
@@ -678,6 +680,25 @@ class QuantileThresholdIndex(BaseIndex):
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
 
+        # Expand DOY-dependent thresholds from (days_per_year, lat, lon)
+        # to (n_days, lat, lon) by indexing with each day's DOY.
+        if self.threshold_is_doy_dependent and time_array is not None:
+            if time_units is None or calendar is None:
+                err_msg = (
+                    f"Index '{self.index_id}' has threshold_is_doy_dependent=True "
+                    "but time_units or calendar is None — cannot expand thresholds."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+            dates = num2date(time_array, units=time_units, calendar=calendar)
+            days_per_year = thresholds_array.shape[0]
+            # timetuple().tm_yday is 1-indexed; clamp Feb-29 for 365-day climatologies
+            doy = np.array(
+                [min(d.timetuple().tm_yday, days_per_year) for d in dates],
+                dtype=np.intp,
+            )
+            thresholds_array = thresholds_array[doy - 1]  # (n_days, lat, lon)
+
         validated_data = validate_data_array(data_array, self.required_vars)
         return self._compute_with_kwargs(
             validated_data,
@@ -690,5 +711,82 @@ class QuantileThresholdIndex(BaseIndex):
             extra_kwargs={
                 "threshold_array": thresholds_array,
                 "fixed_threshold": fixed_threshold,
+            },
+        )
+
+
+class SpellDurationQuantileThresholdIndex(QuantileThresholdIndex):
+    """Index subclass for spell-duration indices that use quantile thresholds.
+
+    Combines DOY-dependent threshold expansion (from QuantileThresholdIndex)
+    with spell-counting logic (WSDI, CSDI). The presence of
+    ``spells_can_span_groups`` triggers the existing spell-handling code in
+    ``compute_indices.py``.
+    """
+
+    spells_can_span_groups: bool = False
+
+    def compute(
+        self,
+        compute_fq:             str,
+        data_array:             np.ndarray | dict[str, np.ndarray],
+        group_index:            np.ndarray,
+        time_array:             np.ndarray | None = None,
+        time_units:             str | None = None,
+        calendar:               str | None = None,
+        lat:                    np.ndarray | None = None,
+        quantile_thresholds:    np.ndarray | None = None,
+        quantile_index:         'QuantileIndex | None' = None,
+        fixed_threshold:        dict[str, float] | float | None = None,
+        spells_can_span_groups: bool | None = None,
+    ):
+        if spells_can_span_groups is None:
+            spells_can_span_groups = self.spells_can_span_groups
+
+        if quantile_index is not None:
+            thresholds_array = quantile_index.thresholds_by_doy
+            if thresholds_array is None:
+                err_msg = (
+                    f"quantile_index '{quantile_index.index_id}' has not been computed "
+                    "yet; thresholds_by_doy is None."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+        elif quantile_thresholds is not None:
+            thresholds_array = quantile_thresholds
+        else:
+            err_msg = "Either quantile_thresholds or quantile_index must be provided"
+            logger.error(err_msg, stack_info=True)
+            raise ValueError(err_msg)
+
+        if self.threshold_is_doy_dependent and time_array is not None:
+            if time_units is None or calendar is None:
+                err_msg = (
+                    f"Index '{self.index_id}' has threshold_is_doy_dependent=True "
+                    "but time_units or calendar is None — cannot expand thresholds."
+                )
+                logger.error(err_msg, stack_info=True)
+                raise ValueError(err_msg)
+            dates = num2date(time_array, units=time_units, calendar=calendar)
+            days_per_year = thresholds_array.shape[0]
+            doy = np.array(
+                [min(d.timetuple().tm_yday, days_per_year) for d in dates],
+                dtype=np.intp,
+            )
+            thresholds_array = thresholds_array[doy - 1]
+
+        validated_data = validate_data_array(data_array, self.required_vars)
+        return self._compute_with_kwargs(
+            validated_data,
+            compute_fq=compute_fq,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            lat=lat,
+            extra_kwargs={
+                "threshold_array": thresholds_array,
+                "fixed_threshold": fixed_threshold,
+                "spells_can_span_groups": spells_can_span_groups,
             },
         )

@@ -244,9 +244,73 @@ def max_spell_length_by_group(
 
     return max_spell, has_spell_end
 
-# ==================================================================== #
-# === Quantile estimation ============================================ #
-# ==================================================================== #
+
+def sum_spell_days_by_group(
+    bool_array: np.ndarray,
+    group_index: np.ndarray,
+    spells_can_span_groups: bool,
+    min_spell_length: int = 6,
+) -> np.ndarray:
+    """Sum the total days in qualifying spells within each group.
+
+    A qualifying spell is a run of consecutive True values with length
+    >= ``min_spell_length``. All days in qualifying spells are counted
+    (not just the last day). Used for WSDI and CSDI.
+
+    Parameters
+    ----------
+    bool_array : np.ndarray
+        Boolean array with shape (time, ...)
+    group_index : np.ndarray
+        Array mapping each time index to a group (e.g., year).
+    spells_can_span_groups : bool
+        If True, spells may span group boundaries and are attributed to
+        the group containing the spell end date.
+    min_spell_length : int, optional
+        Minimum consecutive True values for a qualifying spell. Default 6.
+
+    Returns
+    -------
+    np.ndarray
+        Integer array of shape (n_groups, ...) with total spell days per group.
+    """
+    n_groups = int(group_index.max()) + 1 if group_index.size else 0
+    out_shape = (n_groups,) + tuple(bool_array.shape[1:])
+    result = np.zeros(out_shape, dtype=np.int32)
+    current_run = np.zeros(bool_array.shape[1:], dtype=np.int32)
+
+    for t in range(bool_array.shape[0]):
+        current_group = int(group_index[t])
+        in_spell = bool_array[t]
+
+        if (
+            t > 0
+            and not spells_can_span_groups
+            and group_index[t] != group_index[t - 1]
+        ):
+            current_run[...] = 0
+
+        current_run = np.where(in_spell, current_run + 1, 0)
+
+        is_last_timestep = t == bool_array.shape[0] - 1
+        next_group_changes = (
+            False if is_last_timestep else group_index[t + 1] != group_index[t]
+        )
+        next_is_false = False if is_last_timestep else ~bool_array[t + 1]
+
+        if spells_can_span_groups:
+            spell_ends = in_spell & (is_last_timestep | next_is_false)
+        else:
+            spell_ends = in_spell & (is_last_timestep | next_group_changes | next_is_false)
+
+        if np.any(spell_ends):
+            qualifying = spell_ends & (current_run >= min_spell_length)
+            if np.any(qualifying):
+                result[current_group] += np.where(qualifying, current_run, 0).astype(np.int32)
+
+    return result
+
+
 
 # ==================================================================== #
 # === Quantile estimation for temperature indices ==================== #

@@ -12,7 +12,8 @@ from pyClimExtremes.compute_backend.python_backend_helper_methods import (
     temperature_quantiles_estimation,
     precipitation_quantiles_estimation,
     growing_season_length,
-    max_spell_length_by_group
+    max_spell_length_by_group,
+    sum_spell_days_by_group,
 )
 
 logger = get_logger(__name__)
@@ -74,6 +75,7 @@ class PythonBackend:
         self._precipitation_quantiles_estimation = precipitation_quantiles_estimation
         self._growing_season_length = growing_season_length
         self._max_spell_length_by_group = max_spell_length_by_group
+        self._sum_spell_days_by_group = sum_spell_days_by_group
 
 
     def get_time_out(
@@ -657,6 +659,7 @@ class PythonBackend:
             group_index=group_index,
             dates=dates,
             fixed_threshold=fixed_threshold,
+            run_len=6,
             first_half_months=(1, 2, 3, 4, 5, 6),
         )
         out[:, nh_mask, :] = gsl_nh[:, nh_mask, :]
@@ -676,6 +679,7 @@ class PythonBackend:
             group_index=inv_gsl,
             dates=dates_sh,
             fixed_threshold=fixed_threshold,
+            run_len=6,
             first_half_months=(7, 8, 9, 10, 11, 12),
         )
 
@@ -695,14 +699,14 @@ class PythonBackend:
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
     ):
-        """Number of days when daily minimum temperature < 10th percentile (TN10p).
+        """Percentage of days when daily minimum temperature < 10th percentile (TN10p).
         """
-        # Identify days below threshold
-        exceed_mask = tasmin_data < threshold_array[np.newaxis, ...]
-
-        # Sum days below threshold
-        tn10p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
-
+        exceed_mask = tasmin_data < threshold_array
+        n_groups = int(group_index.max()) + 1
+        exceed_count = self._aggregate_by_group(exceed_mask.astype(np.float32), group_index, np.sum)
+        days_per_group = np.array([np.sum(group_index == i) for i in range(n_groups)], dtype=np.float32)
+        days_per_group = days_per_group.reshape((n_groups,) + (1,) * (exceed_mask.ndim - 1))
+        tn10p = 100.0 * exceed_count / days_per_group
         logger.debug(f"Computed TN10p with shape {tn10p.shape}")
         return tn10p
 
@@ -714,14 +718,14 @@ class PythonBackend:
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
     ):
-        """Number of days when daily minimum temperature > 90th percentile (TN90p).
+        """Percentage of days when daily minimum temperature > 90th percentile (TN90p).
         """
-        # Identify days above threshold
-        exceed_mask = tasmin_data > threshold_array[np.newaxis, ...]
-
-        # Sum days above threshold
-        tn90p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
-
+        exceed_mask = tasmin_data > threshold_array
+        n_groups = int(group_index.max()) + 1
+        exceed_count = self._aggregate_by_group(exceed_mask.astype(np.float32), group_index, np.sum)
+        days_per_group = np.array([np.sum(group_index == i) for i in range(n_groups)], dtype=np.float32)
+        days_per_group = days_per_group.reshape((n_groups,) + (1,) * (exceed_mask.ndim - 1))
+        tn90p = 100.0 * exceed_count / days_per_group
         logger.debug(f"Computed TN90p with shape {tn90p.shape}")
         return tn90p
 
@@ -733,14 +737,14 @@ class PythonBackend:
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
     ):
-        """Number of days when daily maximum temperature < 10th percentile (TX10p).
+        """Percentage of days when daily maximum temperature < 10th percentile (TX10p).
         """
-        # Identify days below threshold
-        exceed_mask = tasmax_data < threshold_array[np.newaxis, ...]
-
-        # Sum days below threshold
-        tx10p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
-
+        exceed_mask = tasmax_data < threshold_array
+        n_groups = int(group_index.max()) + 1
+        exceed_count = self._aggregate_by_group(exceed_mask.astype(np.float32), group_index, np.sum)
+        days_per_group = np.array([np.sum(group_index == i) for i in range(n_groups)], dtype=np.float32)
+        days_per_group = days_per_group.reshape((n_groups,) + (1,) * (exceed_mask.ndim - 1))
+        tx10p = 100.0 * exceed_count / days_per_group
         logger.debug(f"Computed TX10p with shape {tx10p.shape}")
         return tx10p
 
@@ -752,16 +756,58 @@ class PythonBackend:
         group_index:        np.ndarray,
         threshold_array:    np.ndarray,
     ):
-        """Number of days when daily maximum temperature > 90th percentile (TX90p).
+        """Percentage of days when daily maximum temperature > 90th percentile (TX90p).
         """
-        # Identify days above threshold
-        exceed_mask = tasmax_data > threshold_array[np.newaxis, ...]
-
-        # Sum days above threshold
-        tx90p = self._aggregate_by_group(exceed_mask, group_index, np.sum)
-
+        exceed_mask = tasmax_data > threshold_array
+        n_groups = int(group_index.max()) + 1
+        exceed_count = self._aggregate_by_group(exceed_mask.astype(np.float32), group_index, np.sum)
+        days_per_group = np.array([np.sum(group_index == i) for i in range(n_groups)], dtype=np.float32)
+        days_per_group = days_per_group.reshape((n_groups,) + (1,) * (exceed_mask.ndim - 1))
+        tx90p = 100.0 * exceed_count / days_per_group
         logger.debug(f"Computed TX90p with shape {tx90p.shape}")
         return tx90p
+
+    @check_supported_compute_frequencies
+    def wsdi(
+        self,
+        compute_fq:             str,
+        tasmax_data:            np.ndarray,
+        group_index:            np.ndarray,
+        threshold_array:        np.ndarray,
+        spells_can_span_groups: bool,
+    ):
+        """Warm spell duration index (WSDI).
+
+        Annual count of days in spells of >= 6 consecutive days
+        where TX > 90th-percentile threshold.
+        """
+        exceed_mask = tasmax_data > threshold_array
+        wsdi = self._sum_spell_days_by_group(
+            exceed_mask, group_index, spells_can_span_groups, 6
+        )
+        logger.debug(f"Computed WSDI with shape {wsdi.shape}")
+        return wsdi.astype(np.float32)
+
+    @check_supported_compute_frequencies
+    def csdi(
+        self,
+        compute_fq:             str,
+        tasmin_data:            np.ndarray,
+        group_index:            np.ndarray,
+        threshold_array:        np.ndarray,
+        spells_can_span_groups: bool,
+    ):
+        """Cold spell duration index (CSDI).
+
+        Annual count of days in spells of >= 6 consecutive days
+        where TN < 10th-percentile threshold.
+        """
+        exceed_mask = tasmin_data < threshold_array
+        csdi = self._sum_spell_days_by_group(
+            exceed_mask, group_index, spells_can_span_groups, 6
+        )
+        logger.debug(f"Computed CSDI with shape {csdi.shape}")
+        return csdi.astype(np.float32)
 
     # ================================================================ #
     # === Precipitation Indices ====================================== #
@@ -1115,8 +1161,8 @@ class PythonBackend:
 
         Total precipitation on days with daily precipitation > 95th percentile.
         """
-        # Identify days exceeding threshold
-        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        # Identify days exceeding threshold (threshold_array is (lat, lon), broadcasts)
+        exceed_mask = pr_data > threshold_array
 
         # Sum precipitation on wet days
         r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
@@ -1136,8 +1182,8 @@ class PythonBackend:
 
         Total precipitation on days with daily precipitation > 99th percentile.
         """
-        # Identify days exceeding threshold
-        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        # Identify days exceeding threshold (threshold_array is (lat, lon), broadcasts)
+        exceed_mask = pr_data > threshold_array
 
         # Sum precipitation on wet days
         r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
@@ -1164,8 +1210,8 @@ class PythonBackend:
         threshold_array : np.ndarray
             Pre-computed 95th percentile threshold from QuantileThresholdIndex.
         """
-        # Compute R95p (sum on wet days)
-        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        # Compute R95p (sum on wet days; threshold_array is (lat, lon), broadcasts)
+        exceed_mask = pr_data > threshold_array
         r95p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
 
         # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
@@ -1203,8 +1249,8 @@ class PythonBackend:
         threshold_array : np.ndarray
             Pre-computed 99th percentile threshold from QuantileThresholdIndex.
         """
-        # Compute R99p (sum on wet days)
-        exceed_mask = pr_data > threshold_array[np.newaxis, ...]
+        # Compute R99p (sum on wet days; threshold_array is (lat, lon), broadcasts)
+        exceed_mask = pr_data > threshold_array
         r99p = self._aggregate_by_group(pr_data * exceed_mask, group_index, np.sum)
 
         # Compute PRCPTOT (total precipitation on wet days, >= 1mm)
