@@ -113,7 +113,7 @@ class BaseIndex:
     # --- Public API ---
     def __init__(self, compute_backend: str, **kwargs: dict[str, Any]):
         self.backend_name = compute_backend
-        self.compute_backend = get_compute_backend(compute_backend)
+        self.compute_backend = get_compute_backend(compute_backend, **kwargs)
         self.backend_kwargs = kwargs
         if self.index_type in ["temperature", "temperature_quantile"]:
             self.allowed_input_units = ["deg_C", "K"]

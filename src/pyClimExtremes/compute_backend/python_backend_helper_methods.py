@@ -3,6 +3,7 @@
 # ==================================================================== #
 
 import numpy as np
+from numba import njit, cuda
 from netCDF4 import num2date
 
 from pyClimExtremes.logging.setup_logging import get_logger

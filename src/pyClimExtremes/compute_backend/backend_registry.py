@@ -14,6 +14,6 @@ def register_backend(name: str) -> Callable:
     return wrapper
 
 
-def get_compute_backend(name: str) -> object:
+def get_compute_backend(name: str, **kwargs) -> object:
     backend_cls = BACKEND_REGISTRY[name]
-    return backend_cls()
+    return backend_cls(**kwargs)

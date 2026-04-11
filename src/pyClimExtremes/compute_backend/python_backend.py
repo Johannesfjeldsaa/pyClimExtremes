@@ -1,8 +1,9 @@
 # compute_backends/python_backend.py
-from functools import wraps
-from typing import Callable
+from functools import partial, wraps
+from typing import Any, Callable
 
 import numpy as np
+from numba import cuda
 from netCDF4 import num2date
 
 from pyClimExtremes.logging.setup_logging import get_logger
@@ -42,12 +43,11 @@ def check_supported_compute_frequencies(
 class PythonBackend:
     """Python backend for ETCCDI index calculations."""
 
-    def __init__(self):
-        # Cache for quantile thresholds to avoid redundant calculations
-        #self._quantile_threshold_cache = {}
-
-        # register methods from python_backend_helper_methods
-        self._temperature_quantiles_estimation = temperature_quantiles_estimation
+    def __init__(self, use_cuda_if_available: bool = True):
+        self.use_cuda = use_cuda_if_available and cuda.is_available()
+        self._temperature_quantiles_estimation = partial(
+            temperature_quantiles_estimation, use_cuda=self.use_cuda
+        )
         self._precipitation_quantiles_estimation = precipitation_quantiles_estimation
         self._growing_season_length = growing_season_length
         self._max_spell_length_by_group = max_spell_length_by_group
