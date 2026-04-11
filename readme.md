@@ -1,3 +1,5 @@
+
+
 ## Extremes
 
 User API
@@ -25,3 +27,11 @@ User API
 +------------------------+
 | NetCDFWriter           |  ← uses wrapper metadata + index metadata
 +------------------------+
+
+## getting started
+
+```bash
+conda create -n pyClimExtremes python=3.14.4
+conda activate pyClimExtremes
+pip install -e .
+```

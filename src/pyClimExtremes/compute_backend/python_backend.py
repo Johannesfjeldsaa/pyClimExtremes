@@ -48,12 +48,26 @@ def check_supported_compute_frequencies(
 
     return wrapper
 
+def _cuda_available() -> bool:
+    """Check CUDA availability by probing the driver directly.
+
+    ``cuda.is_available()`` can return False even when the GPU is present if
+    CUDA toolkit libraries are not on the dynamic linker path. Calling
+    ``cuda.detect()`` (or listing devices) actually initialises the driver and
+    is a more reliable check.
+    """
+    try:
+        return len(cuda.gpus) > 0
+    except Exception:
+        return False
+
+
 @register_backend("python")
 class PythonBackend:
     """Python backend for ETCCDI index calculations."""
 
     def __init__(self, use_cuda_if_available: bool = True):
-        self.use_cuda = use_cuda_if_available and cuda.is_available()
+        self.use_cuda = use_cuda_if_available and _cuda_available()
         self._temperature_quantiles_estimation = partial(
             temperature_quantiles_estimation, use_cuda=self.use_cuda
         )

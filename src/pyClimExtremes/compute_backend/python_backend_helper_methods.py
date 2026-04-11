@@ -592,6 +592,7 @@ def temperature_quantiles_estimation(
         _format_quantile_label(quantiles), base_data.shape[0], days_per_year,
     )
     if use_cuda:
+        logger.debug("Using CUDA GPU acceleration for quantile computation")
         thresholds = _temperature_quantiles_loop_gpu(
             base_data, base_doy, quantiles, window_size, days_per_year, n_lat, n_lon
         )

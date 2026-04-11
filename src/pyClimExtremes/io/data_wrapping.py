@@ -9,9 +9,7 @@ from pyClimExtremes.indices.units_utils import (
     validate_input_units,
     INPUT_VAR_ALLOWED_INPUT_UNITS,
 )
-from pyClimExtremes.compute_backend.backend_registry import (
-    get_compute_backend,
-)
+from pyClimExtremes.compute_backend import get_compute_backend
 
 logger = get_logger(__name__)
 

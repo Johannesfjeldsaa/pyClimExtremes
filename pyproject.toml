@@ -18,9 +18,14 @@ dependencies = [
   "matplotlib",
   "xarray",
   "tqdm",
+  "numba"
 ]
 
 [project.optional-dependencies]
+
+gpu_support = [
+  "cudatoolkit"
+]
 dev = [
   "pytest",
   "black",
