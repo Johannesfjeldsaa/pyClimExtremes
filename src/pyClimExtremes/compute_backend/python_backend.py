@@ -204,8 +204,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute one or more TN percentile thresholds."""
@@ -232,8 +232,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute TN10p thresholds (10th percentile of daily minimum temp)."""
@@ -261,8 +261,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute TN90p thresholds (90th percentile of daily minimum temp)."""
@@ -291,8 +291,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute one or more TX percentile thresholds."""
@@ -319,8 +319,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute TX10p thresholds (10th percentile of daily maximum temp)."""
@@ -348,8 +348,8 @@ class PythonBackend:
         time_array,
         time_units,
         calendar,
-        window_size=5,
-        bootstrap_samples=None,
+        window_size,
+        bootstrap_samples,
         random_seed=None,
     ):
         """Compute TX90p thresholds (90th percentile of daily maximum temp)."""

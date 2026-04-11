@@ -509,7 +509,7 @@ class QuantileIndex(BaseIndex):
         lat:                np.ndarray | None = None,
         base_period_mask:   np.ndarray | None = None,
         window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
+        bootstrap_samples:  bool = False,
         random_seed:        int | None = None,
         wet_day_threshold:  float | None = None,
     ):
@@ -536,8 +536,8 @@ class QuantileIndex(BaseIndex):
             Required for temperature quantiles with bootstrap.
         window_size : int, optional
             Size of rolling window for daily threshold estimation, by default 5
-        bootstrap_samples : int, optional
-            Number of bootstrap resamples for years in base period, by default 1000
+        bootstrap_samples : bool, optional
+            Whether to perform bootstrap resampling for years in base period, by default False
         random_seed : int | None, optional
             Seed for bootstrap random number generator
 

@@ -540,7 +540,7 @@ def temperature_quantiles_estimation(
     time_units: str,
     calendar: str,
     window_size: int = 5,
-    bootstrap_samples: int | None = None,
+    bootstrap_samples: bool = False,  # reserved for future bootstrap implementations
     random_seed: int | None = None,
     use_cuda: bool = False,
 ) -> np.ndarray:
@@ -564,7 +564,7 @@ def temperature_quantiles_estimation(
         Calendar type.
     window_size : int, optional
         Size of day-of-year window (must be odd). Default 5.
-    bootstrap_samples : int | None, optional
+    bootstrap_samples : bool, optional
         Reserved for future bootstrap implementations.
     random_seed : int | None, optional
         Reserved for reproducibility.

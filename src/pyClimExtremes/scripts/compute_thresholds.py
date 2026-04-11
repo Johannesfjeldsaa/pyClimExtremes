@@ -208,8 +208,8 @@ def compute_threshold_array(
 	units: Mapping[str, str],
 	meta: dict[str, Any],
 	time_groupings: dict[str, dict[str, np.ndarray]],
-	window_size: int = 5,
-	bootstrap_samples: int = 1000,
+	window_size: int,
+	bootstrap_samples: bool,
 	random_seed: int | None = None,
 ) -> np.ndarray:
 	"""Compute the threshold array for a quantile index without writing it.
@@ -368,7 +368,7 @@ def compute_thresholds(
 	pr: Path | None = None,
 	overwrite: bool = False,
 	window_size: int = 5,
-	bootstrap_samples: int = 1000,
+	bootstrap_samples: bool = False,
 	random_seed: int | None = None,
 	**kwargs,
 ) -> tuple[list[Path], list[Path]]:
@@ -396,8 +396,8 @@ def compute_thresholds(
 		Whether existing output files should be overwritten.
 	window_size : int, optional
 		Temperature threshold rolling window size (default 5).
-	bootstrap_samples : int, optional
-		Number of bootstrap samples for base-period years.
+	bootstrap_samples : bool, optional
+		Whether to perform bootstrap resampling for base-period years.
 	random_seed : int | None, optional
 		Seed for reproducible bootstrapping.
 	**kwargs : dict
