@@ -5,13 +5,47 @@ import numpy as np
 from netCDF4 import Dataset, num2date
 
 from pyClimExtremes.indices.base_index import QuantileIndex
-from pyClimExtremes.indices.registry import resolve_indices
+from pyClimExtremes.indices.quantile_indices import build_runtime_quantile_class
 from pyClimExtremes.indices.units_utils import validate_input_units
 from pyClimExtremes.io.data_wrapping import prepare_inputs_and_meta, prepare_time_groupings
 from pyClimExtremes.io.save_utils import check_filepath
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _normalize_percentile_value(raw_value: float | int) -> tuple[float, float]:
+	"""Normalize user-provided percentile values to percent and fraction."""
+	percentile = float(raw_value)
+	if percentile <= 0:
+		err_msg = f"Percentile must be > 0, got {raw_value}."
+		logger.error(err_msg, stack_info=True)
+		raise ValueError(err_msg)
+	if percentile < 1.0:
+		percentile *= 100.0
+	if percentile >= 100.0:
+		err_msg = f"Percentile must be < 100, got {raw_value}."
+		logger.error(err_msg, stack_info=True)
+		raise ValueError(err_msg)
+	return percentile, percentile / 100.0
+
+
+def _resolve_quantile_requests(
+	quantiles: dict[str, float | int | list[float] | tuple[float, ...]],
+) -> list[type[QuantileIndex]]:
+	"""Resolve dict-based generic qXXp requests into runtime quantile classes."""
+	quantile_index_list: list[type[QuantileIndex]] = []
+	for family_id, values in quantiles.items():
+		if isinstance(values, (list, tuple, np.ndarray)):
+			iter_values = values
+		else:
+			iter_values = [values]
+		for value in iter_values:
+			percentile, _ = _normalize_percentile_value(value)
+			quantile_index_list.append(
+				build_runtime_quantile_class(family_id, percentile)
+			)
+	return quantile_index_list
 
 
 def _build_threshold_filename(index_class: type, meta: dict[str, Any]) -> str:
@@ -97,7 +131,7 @@ def _write_threshold_netcdf(
 		)
 
 		# Threshold units follow the input variable units.
-		if index_class.index_type == "temperature":
+		if index_class.index_type == "temperature_quantile":
 			threshold_var.units = "deg_C_or_K"
 		else:
 			threshold_var.units = "mm d-1_or_kg m-2 s-1"
@@ -182,7 +216,7 @@ def compute_threshold_array(
 		baseline_period=baseline_period,
 	)
 
-	if index_class.index_type == "temperature":
+	if index_class.index_type == "temperature_quantile":
 		compute_kwargs = {
 			"compute_fq": "yr",
 			"data_array": arrays,
