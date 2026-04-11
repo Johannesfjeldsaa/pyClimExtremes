@@ -115,9 +115,9 @@ class BaseIndex:
         self.backend_name = compute_backend
         self.compute_backend = get_compute_backend(compute_backend)
         self.backend_kwargs = kwargs
-        if self.index_type == "temperature":
+        if self.index_type in ["temperature", "temperature_quantile"]:
             self.allowed_input_units = ["deg_C", "K"]
-        elif self.index_type == "precipitation":
+        elif self.index_type in ["precipitation", "precipitation_quantile"]:
             self.allowed_input_units = ["mm d-1", "kg m-2 s-1"]
         else:
             err_msg = (
@@ -555,9 +555,9 @@ class QuantileIndex(BaseIndex):
         quantile_time_units = None
         quantile_calendar = None
 
-        if self.index_type == "temperature":
+        if self.index_type == "temperature_quantile":
             if base_period_mask is None:
-                err_msg = "base_period_mask is required for temperature quantile indices"
+                err_msg = "base_period_mask is required for temperature quantiles"
                 logger.error(err_msg, stack_info=True)
                 raise ValueError(err_msg)
             extra_kwargs["base_period_mask"] = base_period_mask
@@ -568,10 +568,10 @@ class QuantileIndex(BaseIndex):
             quantile_time_array = time_array
             quantile_time_units = time_units
             quantile_calendar = calendar
-        elif self.index_type == "precipitation":
+        elif self.index_type == "precipitation_quantile":
             if base_period_mask is None:
                 err_msg = (
-                    "base_period_mask is required for precipitation quantile indices"
+                    "base_period_mask is required for precipitation quantiles"
                 )
                 logger.error(err_msg, stack_info=True)
                 raise ValueError(err_msg)
@@ -603,6 +603,8 @@ class QuantileIndex(BaseIndex):
             if 'thresholds' in result:
                 self.thresholds_by_doy = result['thresholds']
                 result = result['result']
+        elif isinstance(result, np.ndarray):
+            self.thresholds_by_doy = result
 
         return result
 

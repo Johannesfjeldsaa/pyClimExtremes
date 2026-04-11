@@ -27,6 +27,8 @@ def input_var_str_normalize(name: str) -> str:
 
 INDEX_REGISTRY = {}
 TEMPERATURE_INDEX_REGISTRY, PRECIPITATION_INDEX_REGISTRY = {}, {}
+QUANTILE_REGISTRY = {}
+TEMPERATURE_QUANTILE_REGISTRY, PRECIPITATION_QUANTILE_REGISTRY = {}, {}
 
 def register_index(cls):
     """Developers' decorator to add the index class to the global registry.
@@ -35,7 +37,18 @@ def register_index(cls):
     """
     if cls.index_id is None:
         raise ValueError(f"{cls.__name__} must define index_id.")
-    INDEX_REGISTRY[cls.index_id] = cls
+
+    if cls.index_type.endswith("quantile"):
+        if not hasattr(cls, 'quantile') or cls.quantile is None:
+            err_msg = (
+                f"{cls.__name__} has index_type '{cls.index_type}' but does not define a valid 'quantile' attribute. "
+                "Quantile indices must have a 'quantile' attribute defined as a float between 0 and 1."
+            )
+            logger.error(err_msg)
+            raise ValueError(err_msg)
+        QUANTILE_REGISTRY[cls.index_id] = cls
+    else:
+        INDEX_REGISTRY[cls.index_id] = cls
     logger.debug(
         "Registered index '%s'",
         cls.index_id
@@ -44,6 +57,10 @@ def register_index(cls):
         TEMPERATURE_INDEX_REGISTRY[cls.index_id] = cls
     elif cls.index_type == "precipitation":
         PRECIPITATION_INDEX_REGISTRY[cls.index_id] = cls
+    elif cls.index_type == "temperature_quantile":
+        TEMPERATURE_QUANTILE_REGISTRY[cls.index_id] = cls
+    elif cls.index_type == "precipitation_quantile":
+        PRECIPITATION_QUANTILE_REGISTRY[cls.index_id] = cls
     else:
         logger.warning(
             "Index '%s' has unrecognized index_type '%s'. "
@@ -112,8 +129,68 @@ def get_creatable_indices(
         idx_id: cls.index_long_name for idx_id, cls in registry.items()
     }
 
+def get_creatable_quantiles(
+    subset:     str = "all",
+    print_msg:  bool = False,
+    log_msg:    bool = False
+) -> dict:
+    """Return a dictionary of creatable quantile index IDs to their long names.
+
+    Parameters
+    ----------
+    subset : str, optional
+        If 'all', return all creatable quantiles.
+        If 'temperature', return only temperature quantiles.
+        If 'precipitation', return only precipitation quantiles.
+        by default "all"
+    print_msg : bool, optional
+        If True, print the available quantiles, by default False.
+    log_msg : bool, optional
+        If True, log the available quantiles, by default False.
+    """
+    if subset == "temperature":
+        registry = TEMPERATURE_QUANTILE_REGISTRY
+    elif subset == "precipitation":
+        registry = PRECIPITATION_QUANTILE_REGISTRY
+    else:
+        registry = QUANTILE_REGISTRY
+    if print_msg or log_msg:
+        logg_msg = (
+            "Available creatable quantiles:\n" if subset == "all" else
+            f"Available creatable {subset} quantiles:\n"
+        )
+
+        # Collect quantiles that require custom threshold
+        requires_threshold = []
+
+        for idx_id, cls in registry.items():
+            long_name = cls.index_long_name
+            # Check if this quantile requires a custom threshold
+            if (
+                hasattr(cls, 'default_threshold') and
+                cls.default_threshold is None
+            ):
+                logg_msg += f" - {idx_id}: {long_name} *,\n"
+                requires_threshold.append(idx_id)
+            else:
+                logg_msg += f" - {idx_id}: {long_name},\n"
+
+        # Add note if any quantiles require threshold
+        if requires_threshold:
+            logg_msg += "\n* custom threshold X must be provided. Provide through kwargs = {'threshold': {index_ID: X}}.\n"
+
+        if print_msg:
+            print(logg_msg)
+        if log_msg:
+            logger.info(logg_msg)
+
+    return {
+        idx_id: cls.index_long_name for idx_id, cls in registry.items()
+    }
+
 def resolve_indices(
     indices: str | list[str],
+    impact_or_quantile: str = "impact"
 ):
     """Check and resolve the list of indices to compute.
 
@@ -129,13 +206,30 @@ def resolve_indices(
         If any requested index ID is not creatable / defined yet in the
         registry.
     """
-    creatable_indices = sorted(list(INDEX_REGISTRY.keys()))
+    if impact_or_quantile not in ["impact", "quantile"]:
+        err_msg = (
+            f"Invalid value for impact_or_quantile: '{impact_or_quantile}'. "
+            "Expected 'impact' or 'quantile'."
+        )
+        logger.error(err_msg)
+        raise ValueError(err_msg)
+
+    if impact_or_quantile == "impact":
+        registry = INDEX_REGISTRY
+        temp_registry = TEMPERATURE_INDEX_REGISTRY
+        precip_registry = PRECIPITATION_INDEX_REGISTRY
+    else:
+        registry = QUANTILE_REGISTRY
+        temp_registry = TEMPERATURE_QUANTILE_REGISTRY
+        precip_registry = PRECIPITATION_QUANTILE_REGISTRY
+
+    creatable_indices = sorted(list(registry.keys()))
     if indices == "all":
-        index_list = list(INDEX_REGISTRY.values())
+        index_list = list(registry.values())
     elif indices == "temperature":
-        index_list = list(TEMPERATURE_INDEX_REGISTRY.values())
+        index_list = list(temp_registry.values())
     elif indices == "precipitation":
-        index_list = list(PRECIPITATION_INDEX_REGISTRY.values())
+        index_list = list(precip_registry.values())
     else:
         index_list = []
         if not isinstance(indices, list):
@@ -150,7 +244,7 @@ def resolve_indices(
                 )
                 logger.error(err_msg)
                 raise ValueError(err_msg)
-            index_list.append(INDEX_REGISTRY[index_id])
+            index_list.append(registry[index_id])
     logger.debug(f"Resolved indices to compute: {index_list}")
     return index_list
 

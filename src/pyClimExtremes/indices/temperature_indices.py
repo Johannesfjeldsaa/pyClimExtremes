@@ -239,7 +239,7 @@ class TN10pIndex(QuantileThresholdIndex):
     index_type = "temperature"
     index_id = "tn10p"
     index_aliases = ["tn10p", "TN10P", "tn10pETCCDI"]
-    index_long_name = "Number of days when daily minimum temperature < 10th percentile of daily minimum temperature (degC) during the baseline period"
+    index_long_name = "Number of days when daily minimum temperature < 10th percentile of daily minimum temperature during the baseline period"
     index_units = "days"
     unit_after_aggregation = {
         'deg_C': "days",
@@ -258,7 +258,7 @@ class TN90pIndex(QuantileThresholdIndex):
     index_type = "temperature"
     index_id = "tn90p"
     index_aliases = ["tn90p", "TN90P", "tn90pETCCDI"]
-    index_long_name = "Number of days when daily minimum temperature > 90th percentile of daily minimum temperature (degC) during the baseline period"
+    index_long_name = "Number of days when daily minimum temperature > 90th percentile of daily minimum temperature during the baseline period"
     index_units = "days"
     unit_after_aggregation = {
         'deg_C': "days",
@@ -277,7 +277,7 @@ class TX10pIndex(QuantileThresholdIndex):
     index_type = "temperature"
     index_id = "tx10p"
     index_aliases = ["tx10p", "TX10P", "tx10pETCCDI"]
-    index_long_name = "Number of days when daily maximum temperature < 10th percentile of daily maximum temperature (degC) during the baseline period"
+    index_long_name = "Number of days when daily maximum temperature < 10th percentile of daily maximum temperature during the baseline period"
     index_units = "days"
     unit_after_aggregation = {
         'deg_C': "days",
@@ -296,7 +296,7 @@ class TX90pIndex(QuantileThresholdIndex):
     index_type = "temperature"
     index_id = "tx90p"
     index_aliases = ["tx90p", "TX90P", "tx90pETCCDI"]
-    index_long_name = "Number of days when daily maximum temperature > 90th percentile of daily maximum temperature (degC) during the baseline period"
+    index_long_name = "Number of days when daily maximum temperature > 90th percentile of daily maximum temperature during the baseline period"
     index_units = "days"
     unit_after_aggregation = {
         'deg_C': "days",

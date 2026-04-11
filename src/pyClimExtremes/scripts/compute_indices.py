@@ -79,7 +79,7 @@ def _load_quantile_threshold_array(path: Path) -> np.ndarray:
 
 def _resolve_quantile_index_class(threshold_index_id: str) -> type[QuantileIndex]:
     """Resolve and validate the QuantileIndex class backing a threshold id."""
-    resolved = resolve_indices([threshold_index_id])
+    resolved = resolve_indices([threshold_index_id], impact_or_quantile="quantile")
     if len(resolved) != 1:
         err_msg = (
             "Expected exactly one quantile threshold source index for "
@@ -286,7 +286,7 @@ def compute_indices(
 
     start_time_checks = timeit.default_timer()
     # resolve and check indices and frequencies
-    index_list = resolve_indices(indices)
+    index_list = resolve_indices(indices, impact_or_quantile="impact")
 
     # Extract threshold, spell options, and backend kwargs from kwargs
     threshold_dict = kwargs.get('threshold', {})

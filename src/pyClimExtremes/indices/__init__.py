@@ -13,11 +13,13 @@ from .quantile_indices import *
 from .registry import (
     resolve_indices,
     resolve_frequencies,
-    get_creatable_indices
+    get_creatable_indices,
+    get_creatable_quantiles
 )
 
 __all__ = [
     "resolve_indices",
     "resolve_frequencies",
     "get_creatable_indices",
+    "get_creatable_quantiles"
 ]
