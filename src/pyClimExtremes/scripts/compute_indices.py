@@ -111,7 +111,7 @@ def _get_or_compute_quantile_threshold_array(
     meta: dict,
     time_groupings: dict[str, dict[str, np.ndarray]],
     window_size: int,
-    bootstrap_samples: int,
+    bootstrap_samples: bool,
     random_seed: int | None,
 ) -> np.ndarray:
     """Return a quantile-threshold array from cache, file, or in-memory generation."""
@@ -293,7 +293,7 @@ def compute_indices(
     spells_can_span_groups_dict = kwargs.get('spells_can_span_groups', {})
     backend_kwargs = kwargs.get('backend_kwargs', {})
     window_size = kwargs.get('window_size', 5)
-    bootstrap_samples = kwargs.get('bootstrap_samples', 1000)
+    bootstrap_samples = kwargs.get('bootstrap_samples', False)
     random_seed = kwargs.get('random_seed', None)
     quantile_threshold_files = _normalize_quantile_threshold_files(
         kwargs.get('quantile_threshold_files', None)

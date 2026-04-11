@@ -1,8 +1,9 @@
 # compute_backends/python_backend.py
-from functools import wraps
-from typing import Callable
+from functools import partial, wraps
+from typing import Any, Callable
 
 import numpy as np
+from numba import cuda
 from netCDF4 import num2date
 
 from pyClimExtremes.logging.setup_logging import get_logger
@@ -18,6 +19,15 @@ logger = get_logger(__name__)
 
 supported_compute_frequencies = ["mon", "yr"]
 scf_str = ", ".join(supported_compute_frequencies)
+
+
+def _normalize_dates_sequence(dates: Any) -> list[Any]:
+    """Convert num2date output to a concrete sequence for downstream iteration."""
+    if isinstance(dates, np.ndarray):
+        return dates.reshape(-1).tolist()
+    if np.isscalar(dates):
+        return [dates]
+    return list(dates)
 
 
 def check_supported_compute_frequencies(
@@ -38,16 +48,29 @@ def check_supported_compute_frequencies(
 
     return wrapper
 
+def _cuda_available() -> bool:
+    """Check CUDA availability by probing the driver directly.
+
+    ``cuda.is_available()`` can return False even when the GPU is present if
+    CUDA toolkit libraries are not on the dynamic linker path. Calling
+    ``cuda.detect()`` (or listing devices) actually initialises the driver and
+    is a more reliable check.
+    """
+    try:
+        return len(cuda.gpus) > 0
+    except Exception:
+        return False
+
+
 @register_backend("python")
 class PythonBackend:
     """Python backend for ETCCDI index calculations."""
 
-    def __init__(self):
-        # Cache for quantile thresholds to avoid redundant calculations
-        #self._quantile_threshold_cache = {}
-
-        # register methods from python_backend_helper_methods
-        self._temperature_quantiles_estimation = temperature_quantiles_estimation
+    def __init__(self, use_cuda_if_available: bool = True):
+        self.use_cuda = use_cuda_if_available and _cuda_available()
+        self._temperature_quantiles_estimation = partial(
+            temperature_quantiles_estimation, use_cuda=self.use_cuda
+        )
         self._precipitation_quantiles_estimation = precipitation_quantiles_estimation
         self._growing_season_length = growing_season_length
         self._max_spell_length_by_group = max_spell_length_by_group
@@ -70,7 +93,9 @@ class PythonBackend:
         if time_array is None or time_array.size == 0:
             return np.array([])
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter(
             (d.year for d in dates), dtype=int, count=len(time_array)
         )
@@ -114,7 +139,9 @@ class PythonBackend:
         if time_array is None or time_array.size == 0:
             return np.array([]), np.array([], dtype=int)
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter(
             (d.year for d in dates), dtype=int, count=len(time_array)
         )
@@ -159,21 +186,208 @@ class PythonBackend:
     # ================================================================ #
     # === Quantiles ================================================== #
     # ================================================================ #
-    # These indices are used to estimate quantile thresholds from daily data
-    # Then the thresholds are applied to compute the final index values of
-    # the number of days exceeding the threshold per year.
+    # These indices are used to estimate quantile thresholds from daily
+    # data. Then the thresholds are applied to compute the impact
+    # indices that are computed relative to these quantiles, e.g.
+    # tn10p, tn90p, tx10p, tx90p for temperature and r95p, r99p for
+    # precipitation.
 
     # --- temperature quantiles ---
-    def tn_q10p(self):
-        pass
-    def tn_q90p(self):
-        pass
-    def tx_q10p(self):
-        pass
-    def tx_q90p(self):
-        pass
+    @check_supported_compute_frequencies
+    def tn_qXXp(
+        self,
+        compute_fq,
+        tasmin_data,
+        group_index,
+        quantile,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute one or more TN percentile thresholds."""
+        return self._temperature_quantiles_estimation(
+            temp_data=tasmin_data,
+            quantile=quantile,
+            base_period_mask=base_period_mask,
+            group_index=group_index,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            window_size=window_size,
+            bootstrap_samples=bootstrap_samples,
+            random_seed=random_seed,
+        )
+
+    @check_supported_compute_frequencies
+    def tn_q10p(
+        self,
+        compute_fq,
+        tasmin_data,
+        group_index,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute TN10p thresholds (10th percentile of daily minimum temp)."""
+        return self.tn_qXXp(
+            compute_fq=compute_fq,
+            tasmin_data=tasmin_data,
+            group_index=group_index,
+            quantile=0.1,
+            base_period_mask=base_period_mask,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            window_size=window_size,
+            bootstrap_samples=bootstrap_samples,
+            random_seed=random_seed,
+        )
+
+    @check_supported_compute_frequencies
+    def tn_q90p(
+        self,
+        compute_fq,
+        tasmin_data,
+        group_index,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute TN90p thresholds (90th percentile of daily minimum temp)."""
+        return self.tn_qXXp(
+            compute_fq=compute_fq,
+            tasmin_data=tasmin_data,
+            group_index=group_index,
+            quantile=0.9,
+            base_period_mask=base_period_mask,
+            time_array=time_array,
+            time_units=time_units,
+            calendar=calendar,
+            window_size=window_size,
+            bootstrap_samples=bootstrap_samples,
+            random_seed=random_seed,
+        )
+
+    @check_supported_compute_frequencies
+    def tx_qXXp(
+        self,
+        compute_fq,
+        tasmax_data,
+        group_index,
+        quantile,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute one or more TX percentile thresholds."""
+        return self._temperature_quantiles_estimation(
+                temp_data=tasmax_data,
+                quantile=quantile,
+                base_period_mask=base_period_mask,
+                group_index=group_index,
+                time_array=time_array,
+                time_units=time_units,
+                calendar=calendar,
+                window_size=window_size,
+                bootstrap_samples=bootstrap_samples,
+                random_seed=random_seed,
+            )
+
+    @check_supported_compute_frequencies
+    def tx_q10p(
+        self,
+        compute_fq,
+        tasmax_data,
+        group_index,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute TX10p thresholds (10th percentile of daily maximum temp)."""
+        return self.tx_qXXp(
+            compute_fq=compute_fq,
+            tasmax_data=tasmax_data,
+            group_index=group_index,
+            quantile=0.1,
+                base_period_mask=base_period_mask,
+                time_array=time_array,
+                time_units=time_units,
+                calendar=calendar,
+                window_size=window_size,
+                bootstrap_samples=bootstrap_samples,
+                random_seed=random_seed,
+            )
+
+    @check_supported_compute_frequencies
+    def tx_q90p(
+        self,
+        compute_fq,
+        tasmax_data,
+        group_index,
+        base_period_mask,
+        time_array,
+        time_units,
+        calendar,
+        window_size,
+        bootstrap_samples,
+        random_seed=None,
+    ):
+        """Compute TX90p thresholds (90th percentile of daily maximum temp)."""
+        return self.tx_qXXp(
+            compute_fq=compute_fq,
+            tasmax_data=tasmax_data,
+            group_index=group_index,
+            quantile=0.9,
+                base_period_mask=base_period_mask,
+                time_array=time_array,
+                time_units=time_units,
+                calendar=calendar,
+                window_size=window_size,
+                bootstrap_samples=bootstrap_samples,
+                random_seed=random_seed,
+            )
+
 
     # --- precipitation quantiles ---
+
+    @check_supported_compute_frequencies
+    def pr_qXXp(
+        self,
+        compute_fq:         str,
+        pr_data:            np.ndarray,
+        group_index:        np.ndarray,
+        quantile,
+        base_period_mask:   np.ndarray,
+        wet_day_threshold:  float,
+    ) -> np.ndarray:
+        """Compute one or more wet-day precipitation percentile thresholds."""
+        return self._precipitation_quantiles_estimation(
+            pr_data=pr_data,
+            quantile=quantile,
+            base_period_mask=base_period_mask,
+            group_index=group_index,
+            wet_day_threshold=wet_day_threshold,
+        )
 
     @check_supported_compute_frequencies
     def pr_q95p(
@@ -186,11 +400,12 @@ class PythonBackend:
         wet_day_threshold:  float,
     ) -> np.ndarray:
         """Wet-day 95th percentile precipitation threshold per grid point."""
-        return self._precipitation_quantiles_estimation(
+        return self.pr_qXXp(
+            compute_fq=compute_fq,
             pr_data=pr_data,
+            group_index=group_index,
             quantile=quantile,
             base_period_mask=base_period_mask,
-            group_index=group_index,
             wet_day_threshold=wet_day_threshold,
         )
 
@@ -205,11 +420,12 @@ class PythonBackend:
         wet_day_threshold:  float,
     ) -> np.ndarray:
         """Wet-day 99th percentile precipitation threshold per grid point."""
-        return self._precipitation_quantiles_estimation(
+        return self.pr_qXXp(
+            compute_fq=compute_fq,
             pr_data=pr_data,
+            group_index=group_index,
             quantile=quantile,
             base_period_mask=base_period_mask,
-            group_index=group_index,
             wet_day_threshold=wet_day_threshold,
         )
 
@@ -421,7 +637,9 @@ class PythonBackend:
             logger.error(err_msg, stack_info=True)
             raise ValueError(err_msg)
 
-        dates = num2date(time_array, units=time_units, calendar=calendar)
+        dates = _normalize_dates_sequence(
+            num2date(time_array, units=time_units, calendar=calendar)
+        )
         years = np.fromiter((d.year for d in dates), dtype=int, count=len(time_array))
         months = np.fromiter((d.month for d in dates), dtype=int, count=len(time_array))
 

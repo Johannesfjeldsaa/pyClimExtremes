@@ -4,7 +4,7 @@ from typing import Any
 import inspect
 import numpy as np
 
-from pyClimExtremes.compute_backend.backend_registry import get_compute_backend
+from pyClimExtremes.compute_backend import get_compute_backend
 from pyClimExtremes.indices.registry import INPUT_VAR_ALIASES
 from pyClimExtremes.indices.units_utils import unit_str_normalize
 from pyClimExtremes.logging.setup_logging import get_logger
@@ -113,7 +113,7 @@ class BaseIndex:
     # --- Public API ---
     def __init__(self, compute_backend: str, **kwargs: dict[str, Any]):
         self.backend_name = compute_backend
-        self.compute_backend = get_compute_backend(compute_backend)
+        self.compute_backend = get_compute_backend(compute_backend, **kwargs)
         self.backend_kwargs = kwargs
         if self.index_type in ["temperature", "temperature_quantile"]:
             self.allowed_input_units = ["deg_C", "K"]
@@ -509,7 +509,7 @@ class QuantileIndex(BaseIndex):
         lat:                np.ndarray | None = None,
         base_period_mask:   np.ndarray | None = None,
         window_size:        int = 5,
-        bootstrap_samples:  int = 1000,
+        bootstrap_samples:  bool = False,
         random_seed:        int | None = None,
         wet_day_threshold:  float | None = None,
     ):
@@ -536,8 +536,8 @@ class QuantileIndex(BaseIndex):
             Required for temperature quantiles with bootstrap.
         window_size : int, optional
             Size of rolling window for daily threshold estimation, by default 5
-        bootstrap_samples : int, optional
-            Number of bootstrap resamples for years in base period, by default 1000
+        bootstrap_samples : bool, optional
+            Whether to perform bootstrap resampling for years in base period, by default False
         random_seed : int | None, optional
             Seed for bootstrap random number generator
 

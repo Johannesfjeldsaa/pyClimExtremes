@@ -1,3 +1,5 @@
+import numpy as np
+
 from pyClimExtremes.logging.setup_logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +41,13 @@ def register_index(cls):
         raise ValueError(f"{cls.__name__} must define index_id.")
 
     if cls.index_type.endswith("quantile"):
-        if not hasattr(cls, 'quantile') or cls.quantile is None:
+        is_generic_template = getattr(cls, "is_generic_template", False)
+        has_valid_quantile = (
+            hasattr(cls, 'quantile') and
+            cls.quantile is not None and
+            not getattr(np, "isnan", lambda x: False)(cls.quantile)
+        )
+        if not has_valid_quantile and not is_generic_template:
             err_msg = (
                 f"{cls.__name__} has index_type '{cls.index_type}' but does not define a valid 'quantile' attribute. "
                 "Quantile indices must have a 'quantile' attribute defined as a float between 0 and 1."
@@ -47,12 +55,12 @@ def register_index(cls):
             logger.error(err_msg)
             raise ValueError(err_msg)
         QUANTILE_REGISTRY[cls.index_id] = cls
+        register_msg = f"Registered quantile '{cls.index_id}'"
     else:
         INDEX_REGISTRY[cls.index_id] = cls
-    logger.debug(
-        "Registered index '%s'",
-        cls.index_id
-    )
+        register_msg = f"Registered impact index '{cls.index_id}'"
+
+    unrecognized_type = False
     if cls.index_type == "temperature":
         TEMPERATURE_INDEX_REGISTRY[cls.index_id] = cls
     elif cls.index_type == "precipitation":
@@ -62,10 +70,16 @@ def register_index(cls):
     elif cls.index_type == "precipitation_quantile":
         PRECIPITATION_QUANTILE_REGISTRY[cls.index_id] = cls
     else:
+        unrecognized_type = True
         logger.warning(
             "Index '%s' has unrecognized index_type '%s'. "
             "It will not be added to specific type registries.",
             cls.index_id, cls.index_type
+        )
+    if not unrecognized_type:
+        logger.debug(
+            register_msg + " of type '%s' with ID '%s'.",
+            cls.index_type, cls.index_id
         )
     return cls
 
@@ -154,30 +168,33 @@ def get_creatable_quantiles(
         registry = PRECIPITATION_QUANTILE_REGISTRY
     else:
         registry = QUANTILE_REGISTRY
+    creatable_registry = {
+        idx_id: cls for idx_id, cls in registry.items()
+        if getattr(cls, "is_generic_template", False)
+    }
+    if not creatable_registry:
+        creatable_registry = registry
     if print_msg or log_msg:
         logg_msg = (
             "Available creatable quantiles:\n" if subset == "all" else
             f"Available creatable {subset} quantiles:\n"
         )
 
-        # Collect quantiles that require custom threshold
-        requires_threshold = []
+        requires_quantile = []
 
-        for idx_id, cls in registry.items():
+        for idx_id, cls in creatable_registry.items():
             long_name = cls.index_long_name
-            # Check if this quantile requires a custom threshold
-            if (
-                hasattr(cls, 'default_threshold') and
-                cls.default_threshold is None
-            ):
+            if getattr(cls, "is_generic_template", False):
                 logg_msg += f" - {idx_id}: {long_name} *,\n"
-                requires_threshold.append(idx_id)
+                requires_quantile.append(idx_id)
             else:
                 logg_msg += f" - {idx_id}: {long_name},\n"
 
-        # Add note if any quantiles require threshold
-        if requires_threshold:
-            logg_msg += "\n* custom threshold X must be provided. Provide through kwargs = {'threshold': {index_ID: X}}.\n"
+        if requires_quantile:
+            logg_msg += (
+                "\n* custom quantile values must be provided through "
+                "compute_thresholds(quantiles={index_id: [q1, q2, ...]}).\n"
+            )
 
         if print_msg:
             print(logg_msg)
@@ -185,7 +202,7 @@ def get_creatable_quantiles(
             logger.info(logg_msg)
 
     return {
-        idx_id: cls.index_long_name for idx_id, cls in registry.items()
+        idx_id: cls.index_long_name for idx_id, cls in creatable_registry.items()
     }
 
 def resolve_indices(
