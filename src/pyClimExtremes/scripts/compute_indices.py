@@ -223,6 +223,10 @@ def compute_indices(
         * 'all' for all creatable indices,
         * 'temperature' for all temperature indices,
         * 'precipitation' for all precipitation indices,
+        * 'quantile' for all indices that use a quantile-based threshold
+          (e.g. TN10p, TX90p, R95p),
+        * 'non-quantile' for all indices that do *not* use a quantile-based
+          threshold (e.g. TXX, TNn, RX1day, CDD),
         else provide a single index ID or a list of index IDs.
     compute_fq : str | list[str]
         Which frequencies to request. 'all' for all supported frequencies,
@@ -278,6 +282,7 @@ def compute_indices(
         - 'window_size', 'bootstrap_samples', 'random_seed': optional quantile
             threshold generation settings used when in-memory threshold
             generation is needed for quantile-threshold indices.
+
     """
 
     # ------------------------------------ #
@@ -319,7 +324,7 @@ def compute_indices(
                         break
 
             if not threshold_provided:
-                if indices in ['all', 'temperature', 'precipitation']:
+                if indices in ['all', 'temperature', 'precipitation', 'quantile', 'non-quantile']:
                     warn_msg = (
                         f"Skipping index '{index_class.index_id}' because it "
                         "requires an explicit threshold value "

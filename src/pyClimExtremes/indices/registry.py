@@ -31,6 +31,9 @@ INDEX_REGISTRY = {}
 TEMPERATURE_INDEX_REGISTRY, PRECIPITATION_INDEX_REGISTRY = {}, {}
 QUANTILE_REGISTRY = {}
 TEMPERATURE_QUANTILE_REGISTRY, PRECIPITATION_QUANTILE_REGISTRY = {}, {}
+# Impact indices split by whether they use a quantile-threshold
+QUANTILE_THRESHOLD_INDEX_REGISTRY = {}
+NON_QUANTILE_THRESHOLD_INDEX_REGISTRY = {}
 
 def register_index(cls):
     """Developers' decorator to add the index class to the global registry.
@@ -58,6 +61,11 @@ def register_index(cls):
         register_msg = f"Registered quantile '{cls.index_id}'"
     else:
         INDEX_REGISTRY[cls.index_id] = cls
+        # Split impact indices by whether they use a quantile-based threshold
+        if hasattr(cls, 'quantile_threshold_index_id'):
+            QUANTILE_THRESHOLD_INDEX_REGISTRY[cls.index_id] = cls
+        else:
+            NON_QUANTILE_THRESHOLD_INDEX_REGISTRY[cls.index_id] = cls
         register_msg = f"Registered impact index '{cls.index_id}'"
 
     unrecognized_type = False
@@ -247,6 +255,10 @@ def resolve_indices(
         index_list = list(temp_registry.values())
     elif indices == "precipitation":
         index_list = list(precip_registry.values())
+    elif indices == "quantile" and impact_or_quantile == "impact":
+        index_list = list(QUANTILE_THRESHOLD_INDEX_REGISTRY.values())
+    elif indices == "non-quantile" and impact_or_quantile == "impact":
+        index_list = list(NON_QUANTILE_THRESHOLD_INDEX_REGISTRY.values())
     else:
         index_list = []
         if not isinstance(indices, list):
