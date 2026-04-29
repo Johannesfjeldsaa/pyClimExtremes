@@ -1,5 +1,19 @@
 **In no particular order:**
 
+* Code quality/Some tools to introduce:
+   * tests and formating standards - "pytest", "black", "flake8", "isort", "mypy",
+   * consistency with amount of comments, docstrings etc
+
+| Capability         | Fallow | Python ecosystem           |
+| ------------------ | ------ | -------------------------- |
+| Dead code          | ✅      | Vulture                    |
+| Duplication        | ✅      | jscpd / Clone Digger       |
+| Complexity         | ✅      | Radon                      |
+| Architecture rules | ✅      | (rare / manual)            |
+| One unified CLI    | ✅      | ❌ (usually multiple tools) |
+
+   * UV for package management - https://robert-mcdermott.medium.com/saying-goodbye-to-anaconda-91c18ddf89bb
+   * https://pydantic.dev/docs/validation/latest/get-started/ for type hinting instead of mypy?
 * Bootstrap quantiles
 * way more code abstraction:
     * a lot of boilerplate code that makes the code not that readable
@@ -18,9 +32,6 @@
     * document algs
 * Better metadata handling for netcdf writing
 * regression tests
-* tests and formating standards
-    * "pytest", "black", "flake8", "isort", "mypy",
-    * consistency with amount of comments, docstrings etc
 * Test another backend: fortran, c++
 * faster io
 * logo
